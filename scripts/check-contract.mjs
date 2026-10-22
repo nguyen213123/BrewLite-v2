@@ -88,4 +88,11 @@ for (const [name, mutate] of [
   mutate(value);
   assert(!ajv.compile(requestSchema)(value), `Invalid fixture accepted: ${name}`);
 }
-console.log(`Contract valid: ${operations.size} operations, ${fixtures.examples.length} fixtures, 6 invalid-payload checks.`);
+const schemaBlocks = file => new Map([...fs.readFileSync(file, 'utf8').matchAll(/\b(model|enum)\s+(\w+)\s*\{([^}]+)\}/g)]
+  .filter(match => match[2] !== 'SystemCheck')
+  .map(match => [`${match[1]} ${match[2]}`, match[3].replace(/\/\/[^\n]*/g, '').replace(/\s+/g, '')]));
+const referenceBlocks = schemaBlocks('docs/diagrams/schema.prisma');
+const runtimeBlocks = schemaBlocks('backend/prisma/schema.prisma');
+assert.equal(runtimeBlocks.size, referenceBlocks.size, 'Runtime/reference schema model/enum counts differ');
+for (const [name, definition] of referenceBlocks) assert.equal(runtimeBlocks.get(name), definition, `Runtime schema differs from ERD reference: ${name}`);
+console.log(`Contract valid: ${operations.size} operations, ${fixtures.examples.length} fixtures, 6 invalid-payload checks; runtime schema matches ERD reference.`);

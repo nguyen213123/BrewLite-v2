@@ -1413,6 +1413,22 @@
           "Authorization": "Bearer <accessToken>"
         }
       }
+    },
+    {
+      "name": "unimplemented catalog scaffold",
+      "operationId": "listProducts",
+      "method": "GET",
+      "path": "/products",
+      "responseSchema": "Error",
+      "response": {
+        "status": 501,
+        "body": {
+          "statusCode": 501,
+          "code": "FEATURE_NOT_IMPLEMENTED",
+          "message": "Chưa triển khai: products.list",
+          "details": []
+        }
+      }
     }
   ]
 }

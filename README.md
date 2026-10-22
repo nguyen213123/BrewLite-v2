@@ -1,8 +1,8 @@
 # BrewLite
 
-Khung khởi đầu cho nhóm 6 người: Next.js App Router + TypeScript + TailwindCSS, NestJS, Prisma và PostgreSQL. Hiện có trang chào, nút kiểm tra kết nối API, health check, migration nền, Docker Compose và CI. Các module nghiệp vụ được giao cho 5 thành viên theo [kế hoạch](docs/requirements/rebuild-plan.md).
+Khung khởi đầu cho nhóm 6 người: Next.js App Router + TypeScript + TailwindCSS, NestJS, Prisma và PostgreSQL. Có trang chào, health check, schema/migration ERD, module API/DTO/guard/port dùng chung, Docker Compose và CI. Các module nghiệp vụ được giao cho 5 thành viên theo [kế hoạch](docs/requirements/rebuild-plan.md).
 
-Trước khi code module, đọc [bàn giao issue #1](docs/requirements/team-handoff.md), [quy tắc nghiệp vụ](docs/requirements/business-rules.md), [ERD](docs/diagrams/erd.md) và [hợp đồng API](docs/api/README.md). OpenAPI/fixture mô tả các endpoint cần triển khai tiếp; hiện runtime chỉ có health check.
+Trước khi code module, đọc [hướng dẫn bộ khung API](docs/api/skeleton.md), [bàn giao issue #1](docs/requirements/team-handoff.md), [quy tắc nghiệp vụ](docs/requirements/business-rules.md), [ERD](docs/diagrams/erd.md) và [hợp đồng API](docs/api/README.md). 17 route đã được mount theo OpenAPI; service nghiệp vụ chưa triển khai trả 501, endpoint bảo vệ thiếu Bearer trả 401. Health vẫn chạy thật; khung chưa có đăng nhập/thanh toán hoạt động.
 
 ## Yêu cầu
 
@@ -40,7 +40,7 @@ docker compose ps
 docker compose logs -f
 ```
 
-Backend tự áp dụng migration đã commit trước khi chạy. `docker compose down` dừng các dịch vụ, dữ liệu database được giữ trong volume. Các thông tin đăng nhập mẫu chỉ dùng ở local. Khi chạy bằng Docker, cấu hình nằm trong compose.yaml; thay đổi NEXT_PUBLIC_API_URL cần build lại frontend vì giá trị được nhúng lúc build.
+Backend tự áp dụng migration đã commit trước khi chạy. `docker compose down` dừng các dịch vụ, dữ liệu database được giữ trong volume. Project tên `brewlite-v2` để không tái sử dụng volume của BrewLite cũ. Nếu trước đây chạy project `brewlite`, dừng container db cũ đang chiếm cổng trước khi chạy v2; không xóa/reset volume cũ. Các thông tin đăng nhập mẫu chỉ dùng ở local. Khi chạy bằng Docker, cấu hình nằm trong compose.yaml; thay đổi NEXT_PUBLIC_API_URL cần build lại frontend vì giá trị được nhúng lúc build.
 
 ## Lệnh chung
 
@@ -49,7 +49,9 @@ Backend tự áp dụng migration đã commit trước khi chạy. `docker compo
 | `npm run dev` | Chạy frontend và backend, Ctrl+C dừng cả hai |
 | `npm run lint` | ESLint cho hai ứng dụng |
 | `npm run build` | Generate Prisma client và build hai ứng dụng |
-| `npm test` | Kiểm thử HTTP health endpoints với database giả lập |
+| `npm test` | Kiểm thử HTTP/DTO/guard/State Machine; DB integration opt-in qua RUN_DB_TESTS=1 |
+| `npm run api:types` | Sinh TypeScript type từ OpenAPI cho backend/frontend |
+| `npm run api:check` | Kiểm tra type sinh tự động khớp contract |
 | `npm run db:generate` | Sinh Prisma client sau khi đổi schema |
 | `npm run db:migrate -- --name ten_thay_doi` | Tạo và áp dụng migration khi phát triển |
 | `npm --prefix backend run prisma:deploy` | Áp dụng migration đã commit |
@@ -73,7 +75,7 @@ docs/diagrams/          Kiến trúc, ERD, Use Case
 .github/workflows/      CI
 ```
 
-Tạo module nghiệp vụ trong `backend/src/modules/<module>/` và phần frontend tương ứng khi nhận việc. Không dựng sẵn JWT, Zustand, catalog hoặc payment trong bước khung nền; thành viên thêm dependency cần thiết cùng module mình phụ trách.
+Các module đã có sẵn trong `backend/src/modules/`; thay thân hàm stub trong service đúng phân công. Controller/DTO và các port trong `backend/src/common/contracts/ports.ts` là điểm tích hợp chung. Thành viên thêm thư viện JWT/bcrypt/Zustand cần thiết cùng module; không bỏ guard hoặc đưa fixture vào runtime để trả success giả.
 
 Mỗi tính năng có nhánh riêng, PR và ít nhất một người khác review. Cập nhật docs/api và phối hợp migration khi thay đổi contract/schema. CI kiểm tra lint, test, build và kết nối database thật qua PostgreSQL service. Quy tắc bắt buộc review/CI cần được bật trong cài đặt GitHub khi tạo repository.
 

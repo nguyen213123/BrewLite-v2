@@ -1,4 +1,4 @@
-name: brewlite
+name: brewlite-v2
 
 services:
   db:

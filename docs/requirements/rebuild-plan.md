@@ -118,4 +118,4 @@ Trong khi chờ API, frontend có thể dùng fixture đúng hợp đồng. Tiê
 
 Repository chạy được theo README; Compose và dữ liệu mẫu; ERD và luồng nghiệp vụ; hợp đồng API; backlog và tài liệu sprint; bằng chứng commit/PR/review; kết quả kiểm thử; kịch bản demo thành công, thất bại, xử lý lặp và tranh chấp tồn kho.
 
-**Trạng thái:** khung và 16 issue đã được tạo trên nguyen213123/BrewLite-v2. Bước tiếp theo là review baseline issue #1, gán TV1–TV5 bằng tên thật và làm theo thứ tự PR trong team-handoff.md. Baseline tài liệu chưa đồng nghĩa các API nghiệp vụ đã được triển khai.
+**Trạng thái:** khung và 16 issue đã được tạo trên nguyen213123/BrewLite-v2. Khung API đã bổ sung route/DTO/guard/port và schema/migration nền theo ERD; các service nghiệp vụ vẫn là stub 501. Bước tiếp theo là review/merge các PR nền, gán TV1–TV5 bằng tên thật và làm theo team-handoff.md cùng docs/api/skeleton.md. Không coi chức năng đã hoàn thành chỉ vì route hoặc type đã có.

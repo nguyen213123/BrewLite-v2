@@ -21,7 +21,7 @@ ValidationPipe đã bật `whitelist`, `forbidNonWhitelisted`, `transform`. Thà
 - [ERD](../diagrams/erd.md), [schema Prisma tham chiếu](../diagrams/schema.prisma): quan hệ, ràng buộc, index và chủ bảng.
 - [Bàn giao cho nhóm](../requirements/team-handoff.md): issue của từng thành viên, dịch vụ cần cung cấp và thứ tự merge.
 
-Chỉ hai health endpoint đã triển khai. Các endpoint nghiệp vụ trong OpenAPI là đặc tả phải triển khai tiếp; không coi tài liệu này là code API đã chạy.
+Hai health endpoint có logic thật. Khung API hiện đã mount các route/DTO/guard theo OpenAPI; service chưa triển khai trả 501 FEATURE_NOT_IMPLEMENTED, không trả success giả. Xem [hướng dẫn skeleton](skeleton.md) để nhận thư mục, port và chạy test. Success JSON trong fixture vẫn là mục tiêu phải triển khai tiếp.
 
 ## Quy ước chung
 
@@ -62,8 +62,9 @@ Chỉ hai health endpoint đã triển khai. Các endpoint nghiệp vụ trong O
 | 422 | PRODUCT_UNAVAILABLE / INVALID_PRODUCT_OPTION | Product ngừng bán hoặc size/topping không hợp lệ |
 | 422 | PROMOTION_INVALID | Mã sai, ngoài thời gian hoặc chưa đủ điều kiện |
 | 500 | INTERNAL_ERROR | Lỗi ngoài dự kiến, không lộ SQL/stack/secret |
+| 501 | FEATURE_NOT_IMPLEMENTED | Tạm thời: service nghiệp vụ hoặc xác minh IdentityPort chưa triển khai trong skeleton |
 
-details luôn là mảng (có thể rỗng). Client xử lý theo code, không parse message. Exception filter và ValidationPipe exceptionFactory cần được TV4 triển khai theo envelope này; scaffold hiện tại vẫn dùng lỗi mặc định NestJS. `/health/ready` giữ nguyên lỗi legacy 503 có statusCode/message/error như OpenAPI; không ép health đổi envelope trong bước tài liệu.
+details luôn là mảng (có thể rỗng). Client xử lý theo code, không parse message. Exception filter và ValidationPipe exceptionFactory dùng chung đã có trong skeleton; TV4 tiếp tục dùng khi hoàn thiện auth. `/health/ready` giữ nguyên lỗi legacy 503 có statusCode/message/error như OpenAPI. Các route không tồn tại dùng framework code NOT_FOUND, không phải ORDER_NOT_FOUND của service nghiệp vụ.
 
 ## Bảng endpoint và chủ trì
 
