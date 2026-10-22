@@ -6,7 +6,7 @@
 2. [ERD](../diagrams/erd.md) và [Prisma reference](../diagrams/schema.prisma): bảng và người sở hữu.
 3. [OpenAPI](../api/openapi.yaml) và [fixture](../api/examples.json): JSON dùng chung, không tự đổi tên field.
 
-Baseline v1.0.0 chốt kỹ thuật để bắt đầu phát triển; cần review bởi đại diện nhóm qua PR trước khi merge. Chưa có ai được coi là đã review chỉ vì có tên TV1–TV5 dưới đây. Trưởng nhóm gán GitHub account thật khi mời đủ thành viên.
+Baseline v1.0.0 chốt kỹ thuật để bắt đầu phát triển; cần review bởi đại diện nhóm qua PR trước khi merge. Chưa có ai được coi là đã review chỉ vì có tên TV1–TV5 dưới đây. Trưởng nhóm gán GitHub account thật khi mời đủ thành viên. Khung thư mục/port đã có, xem thêm [API skeleton](../api/skeleton.md).
 
 ## Phân công đã cân bằng
 
@@ -34,7 +34,7 @@ Task 9 gồm UI/API của TV4 và Compose/README/demo của trưởng nhóm cùn
 ## Thứ tự mở PR và tích hợp
 
 1. Review/merge PR tài liệu issue #1, chạy docs:check. Mọi người có thể làm UI/DTO theo fixture trong khi chờ baseline DB.
-2. TV3 mở PR schema nền: copy các enum/model đã chốt từ schema tham chiếu, giữ generator runtime, tạo migration và CHECK/index theo ERD. Các chủ bảng review cùng một baseline; chạy migrate trên PostgreSQL mới.
+2. Review/merge PR khung API (phụ thuộc PR #17): đã có schema/migration nền, controller/DTO/service stub/port, filter/guard, UnitOfWork và generated types. TV3 cùng chủ bảng kiểm tra migration và CHECK/index trên PostgreSQL mới; không tạo migration nền trùng ở nhánh riêng.
 3. TV1 catalog/seed (#2), TV4 auth/error filter (#6), TV5 idempotency nền (#11) triển khai song song. TV2 menu/cart dùng fixture rồi nối catalog; TV1 detail tích hợp cart qua interface chung.
 4. TV3 nối order/stock/state (#7–9) vào schema/auth/catalog/idempotency; TV1 cung cấp promo, TV4 loyalty theo interface transaction ngay cả khi UI chưa xong.
 5. TV5 payment (#10), TV4 history (#12), TV2 checkout (#13) tích hợp trên API thật. TV5 phối hợp TV3 kiểm thử request lặp/đồng thời; không giữ mock fixture làm nguồn dữ liệu nghiệm thu.

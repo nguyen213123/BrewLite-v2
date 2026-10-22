@@ -1,6 +1,6 @@
 # ERD và quyền sở hữu schema — BrewLite v1
 
-Đọc cùng [quy tắc nghiệp vụ](../requirements/business-rules.md) và [schema Prisma tham chiếu](schema.prisma). Chỉ có bảng SystemCheck đang tồn tại trong runtime; sơ đồ sau là thiết kế để triển khai tiếp.
+Đọc cùng [quy tắc nghiệp vụ](../requirements/business-rules.md) và [schema Prisma tham chiếu](schema.prisma). Bộ khung API đã đưa 13 bảng nghiệp vụ này vào schema runtime bằng migration nền `20261022010000_api_baseline`, giữ SystemCheck và migration cũ. Service nghiệp vụ vẫn là stub để thành viên triển khai.
 
 ```mermaid
 erDiagram
@@ -143,7 +143,7 @@ erDiagram
 | Catalog | unique ProductSize(productId,size); PK ProductTopping(productId,toppingId); active catalog không thay snapshot cũ |
 | Order | code unique; index (userId,createdAt,id), (status,createdAt); version mặc định 0, tăng mỗi transition |
 | Idempotency | unique(userId,scope,key); response/status chỉ công khai qua replay đúng user, không expose requestHash |
-| Payment | idempotencyRecordId unique; index orderId; idempotencyKey nằm trên Payment để đáp ứng thực thể tối thiểu của đề, phải bằng record.key |
+| Payment | idempotencyRecordId unique; index orderId; SQL partial unique orderId khi status SUCCEEDED/REFUNDED để chặn hai thành công kể cả khác key; idempotencyKey phải bằng record.key |
 | Loyalty | unique(orderId,kind) cho EARN/REVERSE; index(userId,createdAt,id); userId phải khớp chủ đơn |
 | Audit | unique(orderId,orderVersion); sự kiện tạo có fromStatus=null, toStatus=PENDING, orderVersion=0 |
 | DB CHECK trong migration | stock/version/price/counter/loyaltyPoints >=0; qty 1..99; subtotal,discount,total trong 0..2000000000; total=subtotal-discount; discount<=subtotal; Promotion endsAt>startsAt, maxUses null hoặc >0, usedCount<=maxUses nếu có; PERCENT.value 1..100, FIXED.value>0 |
@@ -162,4 +162,4 @@ Schema Prisma không biểu diễn tất cả CHECK hoặc ràng buộc nhiều 
 | TV5 | Payment, IdempotencyRecord | TV3 phối hợp unit-of-work và thứ tự khóa |
 | Trưởng nhóm | Review và thứ tự merge schema/migration | Không tạo migration trùng chức năng ở nhiều nhánh |
 
-TV3 đưa schema baseline đã review vào backend/prisma/schema.prisma bằng một PR đầu tiên và tạo migration từ schema tham chiếu; giữ SystemCheck hoặc xóa nó bằng migration rõ ràng. Sau khi merge, mọi thành viên cập nhật main rồi tạo migration module bổ sung nếu cần. Không tự chỉnh migration đã áp dụng/đã merge; tạo migration mới. Feature branch có thể code theo schema tham chiếu trước nhưng phải cập nhật baseline trước khi merge.
+Schema/migration nền đã được chuẩn bị trong PR khung API; TV3 cùng các chủ bảng review và kiểm chứng trước khi trưởng nhóm merge. Không tạo migration nền thứ hai trùng các bảng này. Sau khi merge, mọi thành viên cập nhật main rồi tạo migration bổ sung nếu cần. Không chỉnh migration đã áp dụng/đã merge; tạo migration mới. SystemCheck được giữ nguyên.

@@ -3,8 +3,9 @@ info:
   title: BrewLite API
   version: 1.0.0
   description: >-
-    Baseline issue #1, 22/10/2026. Các endpoint nghiệp vụ là contract để triển khai, chưa có trong runtime. Chỉ /health
-    và /health/ready đã tồn tại. Đọc business-rules.md để hiểu transaction, State Machine và replay.
+    Baseline issue #1, 22/10/2026. Routes/DTO/guards đã được dựng trong API skeleton. Chỉ health có nghiệp vụ thật;
+    service chưa triển khai trả 501 FEATURE_NOT_IMPLEMENTED. Protected routes thiếu JWT trả 401; khi IdentityPort chưa
+    triển khai, Bearer không được tin cậy và trả 501. Success schema/fixture là contract mục tiêu cho từng module.
 servers:
   - url: http://localhost:3001/api
     description: Local development
@@ -122,6 +123,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '501':
+          description: >-
+            Tạm thời trong giai đoạn skeleton: dịch vụ hoặc IdentityPort chưa triển khai. Không phải success hay kết quả
+            nghiệp vụ.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
       security: []
       parameters:
         - $ref: '#/components/parameters/Page'
@@ -187,6 +196,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '501':
+          description: >-
+            Tạm thời trong giai đoạn skeleton: dịch vụ hoặc IdentityPort chưa triển khai. Không phải success hay kết quả
+            nghiệp vụ.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
       security: []
       parameters:
         - $ref: '#/components/parameters/Id'
@@ -242,6 +259,14 @@ paths:
                 minimum: 1
         '500':
           description: Lỗi nội bộ, không lộ chi tiết DB
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '501':
+          description: >-
+            Tạm thời trong giai đoạn skeleton: dịch vụ hoặc IdentityPort chưa triển khai. Không phải success hay kết quả
+            nghiệp vụ.
           content:
             application/json:
               schema:
@@ -306,6 +331,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '501':
+          description: >-
+            Tạm thời trong giai đoạn skeleton: dịch vụ hoặc IdentityPort chưa triển khai. Không phải success hay kết quả
+            nghiệp vụ.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
       security: []
       requestBody:
         required: true
@@ -345,6 +378,14 @@ paths:
                 $ref: '#/components/schemas/Error'
         '500':
           description: Lỗi nội bộ, không lộ chi tiết DB
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '501':
+          description: >-
+            Tạm thời trong giai đoạn skeleton: dịch vụ hoặc IdentityPort chưa triển khai. Không phải success hay kết quả
+            nghiệp vụ.
           content:
             application/json:
               schema:
@@ -417,6 +458,14 @@ paths:
                 $ref: '#/components/schemas/Error'
         '500':
           description: Lỗi nội bộ, không lộ chi tiết DB
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '501':
+          description: >-
+            Tạm thời trong giai đoạn skeleton: dịch vụ hoặc IdentityPort chưa triển khai. Không phải success hay kết quả
+            nghiệp vụ.
           content:
             application/json:
               schema:
@@ -571,6 +620,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '501':
+          description: >-
+            Tạm thời trong giai đoạn skeleton: dịch vụ hoặc IdentityPort chưa triển khai. Không phải success hay kết quả
+            nghiệp vụ.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -636,6 +693,14 @@ paths:
                 $ref: '#/components/schemas/Error'
         '500':
           description: Lỗi nội bộ, không lộ chi tiết DB
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '501':
+          description: >-
+            Tạm thời trong giai đoạn skeleton: dịch vụ hoặc IdentityPort chưa triển khai. Không phải success hay kết quả
+            nghiệp vụ.
           content:
             application/json:
               schema:
@@ -712,6 +777,14 @@ paths:
                     details: []
         '500':
           description: Lỗi nội bộ, không lộ chi tiết DB
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '501':
+          description: >-
+            Tạm thời trong giai đoạn skeleton: dịch vụ hoặc IdentityPort chưa triển khai. Không phải success hay kết quả
+            nghiệp vụ.
           content:
             application/json:
               schema:
@@ -795,6 +868,14 @@ paths:
                 minimum: 1
         '500':
           description: Lỗi nội bộ, không lộ chi tiết DB
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '501':
+          description: >-
+            Tạm thời trong giai đoạn skeleton: dịch vụ hoặc IdentityPort chưa triển khai. Không phải success hay kết quả
+            nghiệp vụ.
           content:
             application/json:
               schema:
@@ -905,6 +986,14 @@ paths:
                 minimum: 1
         '500':
           description: Lỗi nội bộ, không lộ chi tiết DB
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '501':
+          description: >-
+            Tạm thời trong giai đoạn skeleton: dịch vụ hoặc IdentityPort chưa triển khai. Không phải success hay kết quả
+            nghiệp vụ.
           content:
             application/json:
               schema:
@@ -1189,6 +1278,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '501':
+          description: >-
+            Tạm thời trong giai đoạn skeleton: dịch vụ hoặc IdentityPort chưa triển khai. Không phải success hay kết quả
+            nghiệp vụ.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -1269,6 +1366,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '501':
+          description: >-
+            Tạm thời trong giai đoạn skeleton: dịch vụ hoặc IdentityPort chưa triển khai. Không phải success hay kết quả
+            nghiệp vụ.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
       requestBody:
         required: true
         content:
@@ -1310,6 +1415,14 @@ paths:
                 $ref: '#/components/schemas/Error'
         '500':
           description: Lỗi nội bộ, không lộ chi tiết DB
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '501':
+          description: >-
+            Tạm thời trong giai đoạn skeleton: dịch vụ hoặc IdentityPort chưa triển khai. Không phải success hay kết quả
+            nghiệp vụ.
           content:
             application/json:
               schema:
@@ -1356,6 +1469,14 @@ paths:
                 $ref: '#/components/schemas/Error'
         '500':
           description: Lỗi nội bộ, không lộ chi tiết DB
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '501':
+          description: >-
+            Tạm thời trong giai đoạn skeleton: dịch vụ hoặc IdentityPort chưa triển khai. Không phải success hay kết quả
+            nghiệp vụ.
           content:
             application/json:
               schema:

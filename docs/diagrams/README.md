@@ -13,4 +13,4 @@ Baseline thiết kế cho issue #1:
 - [Schema Prisma tham chiếu](schema.prisma)
 - [Quy tắc nghiệp vụ và bảng chuyển trạng thái](../requirements/business-rules.md)
 
-Schema runtime hiện tại chỉ có SystemCheck. TV3 phối hợp chủ module tạo PR migration nền theo schema tham chiếu sau review; tài liệu thiết kế không tự tạo bảng trong database.
+Schema runtime của khung API đã có 13 bảng nghiệp vụ theo schema tham chiếu và giữ SystemCheck. Áp dụng migration bằng prisma:deploy sau khi trưởng nhóm review/merge PR nền; service nghiệp vụ vẫn phải được từng thành viên thực hiện và kiểm thử.
