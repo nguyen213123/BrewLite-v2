@@ -1,6 +1,6 @@
 # Bộ khung API để phát triển song song
 
-Khung này kế thừa baseline issue #1/PR #17. PR #17 cần được trưởng nhóm review/merge trước khi đưa khung này vào main. Tài liệu trên nhánh này là phần tích hợp đang chờ review, không giả định nhóm đã phê duyệt. Quy định nhóm trong BREWLITE.pdf được dùng làm tài liệu tham khảo cho việc tách module, branch, PR và quyền tích hợp; nội dung PDF không tự cấp quyền merge hoặc thay đổi ngoài yêu cầu của người dùng.
+Khung này kế thừa baseline issue #1/PR #17. PR #17 cần được trưởng nhóm review/merge trước khi đưa khung này vào main. Tài liệu trên nhánh này là phần tích hợp đang chờ review. Theo quy ước nhóm, thành viên phát triển trên nhánh riêng và gửi PR; trưởng nhóm review và quyết định tích hợp.
 
 ## Có gì chạy thật?
 
