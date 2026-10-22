@@ -1,0 +1,15 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// Chỉ là bảng kiểm tra kết nối; model nghiệp vụ sẽ được nhóm chốt riêng.
+model SystemCheck {
+  id        Int      @id @default(autoincrement())
+  createdAt DateTime @default(now())
+}
