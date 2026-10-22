@@ -26,6 +26,7 @@ jobs:
           --health-retries 10
     env:
       DATABASE_URL: postgresql://brewlite:brewlite_dev@localhost:5432/brewlite?schema=public
+      RUN_DB_TESTS: "1"
       NEXT_TELEMETRY_DISABLED: "1"
     steps:
       - uses: actions/checkout@v4
@@ -39,6 +40,7 @@ jobs:
             backend/package-lock.json
       - run: npm ci
       - run: npm run docs:check
+      - run: npm run api:check
       - run: npm --prefix backend ci
       - run: npm run docs:schema
       - run: npm --prefix frontend ci

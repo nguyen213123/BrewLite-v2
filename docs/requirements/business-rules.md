@@ -7,7 +7,7 @@ Ngày chốt kỹ thuật: 22/10/2026. Phục vụ issue #1, Task 2–10 của �
 - Bắt buộc: Next.js, NestJS, menu, size S/M/L, topping, cart có badge, JWT, đơn, mock payment Ví/Thẻ, lịch sử và bốn nghiệp vụ Task 10.
 - Đề gốc: mục 8–12; API dưới đây thêm prefix `/api` theo bộ khung hiện có.
 - OpenAPI: `docs/api/openapi.yaml` quyết định hình dạng JSON, đường dẫn, HTTP status. `docs/api/examples.json` là fixture kiểm chứng cùng contract.
-- ERD và schema tham chiếu: `docs/diagrams/erd.md`, `docs/diagrams/schema.prisma`. Schema tham chiếu chưa thay thế schema runtime; migration nền được TV3 phối hợp các chủ module đưa vào một PR riêng trước các PR nghiệp vụ.
+- ERD và schema tham chiếu: `docs/diagrams/erd.md`, `docs/diagrams/schema.prisma`. Khung API đã có schema runtime và migration nền theo 13 bảng này; TV3 phối hợp các chủ bảng review trước khi trưởng nhóm merge. Không tạo lại migration nền ở từng feature branch.
 - Tài liệu này quyết định công thức, trạng thái, transaction và hành vi retry. Khi đổi contract, phải cập nhật cả OpenAPI, ví dụ, tài liệu và các module liên quan trong cùng PR.
 - Không yêu cầu trong MVP: quản trị catalog, UI barista, cổng thanh toán thật, refresh token, sử dụng/đổi điểm lấy tiền, tồn kho từng nguyên liệu, tự động hết hạn đơn.
 

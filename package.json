@@ -13,6 +13,8 @@
     "test": "npm --prefix backend test",
     "docs:check": "node scripts/check-contract.mjs",
     "docs:schema": "npm --prefix backend run prisma:validate -- --schema ../docs/diagrams/schema.prisma",
+    "api:types": "node scripts/generate-api-types.mjs",
+    "api:check": "node scripts/generate-api-types.mjs --check",
     "db:generate": "npm --prefix backend run prisma:generate",
     "db:migrate": "npm --prefix backend run prisma:migrate --",
     "db:studio": "npm --prefix backend run prisma:studio"
