@@ -2,6 +2,8 @@
 
 Khung khởi đầu cho nhóm 6 người: Next.js App Router + TypeScript + TailwindCSS, NestJS, Prisma và PostgreSQL. Hiện có trang chào, nút kiểm tra kết nối API, health check, migration nền, Docker Compose và CI. Các module nghiệp vụ được giao cho 5 thành viên theo [kế hoạch](docs/requirements/rebuild-plan.md).
 
+Trước khi code module, đọc [bàn giao issue #1](docs/requirements/team-handoff.md), [quy tắc nghiệp vụ](docs/requirements/business-rules.md), [ERD](docs/diagrams/erd.md) và [hợp đồng API](docs/api/README.md). OpenAPI/fixture mô tả các endpoint cần triển khai tiếp; hiện runtime chỉ có health check.
+
 ## Yêu cầu
 
 - Node.js 24 LTS và npm.

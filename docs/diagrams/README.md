@@ -7,4 +7,10 @@ flowchart LR
   Prisma --> DB[(PostgreSQL :5432)]
 ```
 
-ERD, Use Case và luồng trạng thái đơn hàng sẽ được cả nhóm chốt trước khi thêm model nghiệp vụ. Schema hiện tại chỉ có bảng SystemCheck để khởi tạo và kiểm chứng migration.
+Baseline thiết kế cho issue #1:
+
+- [ERD, ràng buộc/index và chủ bảng](erd.md)
+- [Schema Prisma tham chiếu](schema.prisma)
+- [Quy tắc nghiệp vụ và bảng chuyển trạng thái](../requirements/business-rules.md)
+
+Schema runtime hiện tại chỉ có SystemCheck. TV3 phối hợp chủ module tạo PR migration nền theo schema tham chiếu sau review; tài liệu thiết kế không tự tạo bảng trong database.

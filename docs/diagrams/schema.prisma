@@ -1,0 +1,230 @@
+// Contract reference only. Runtime remains backend/prisma/schema.prisma.
+// SQL CHECK constraints and cross-table rules are listed in erd.md.
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  CUSTOMER
+  STAFF
+}
+enum Size {
+  S
+  M
+  L
+}
+enum OrderStatus {
+  PENDING
+  PAID
+  PREPARING
+  READY
+  COMPLETED
+  PAYMENT_FAILED
+  CANCELLED
+}
+enum ReservationStatus {
+  HELD
+  CONSUMED
+  RELEASED
+}
+enum PromotionType {
+  FIXED
+  PERCENT
+}
+enum PaymentMethod {
+  WALLET
+  CARD
+}
+enum PaymentStatus {
+  SUCCEEDED
+  FAILED
+  REFUNDED
+}
+enum LoyaltyKind {
+  EARN
+  REVERSE
+}
+enum IdempotencyScope {
+  CREATE_ORDER
+  PAY_ORDER
+}
+enum IdempotencyStatus {
+  PROCESSING
+  COMPLETED
+}
+
+model User {
+  id             String              @id @default(uuid()) @db.Uuid
+  email          String              @unique @db.VarChar(254)
+  passwordHash   String              @db.VarChar(60)
+  role           Role                @default(CUSTOMER)
+  loyaltyPoints  Int                 @default(0)
+  createdAt      DateTime            @default(now())
+  orders         Order[]
+  loyaltyEntries LoyaltyEntry[]
+  idempotency    IdempotencyRecord[]
+  orderEvents    OrderEvent[]
+}
+
+model Product {
+  id          String           @id @default(uuid()) @db.Uuid
+  name        String           @db.VarChar(120)
+  description String           @db.VarChar(1000)
+  price       Int
+  imageUrl    String           @db.VarChar(2048)
+  stock       Int              @default(0)
+  version     Int              @default(0)
+  active      Boolean          @default(true)
+  createdAt   DateTime         @default(now())
+  sizes       ProductSize[]
+  toppings    ProductTopping[]
+  orderItems  OrderItem[]
+}
+
+model ProductSize {
+  id        String  @id @default(uuid()) @db.Uuid
+  productId String  @db.Uuid
+  size      Size
+  price     Int
+  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+  @@unique([productId, size])
+}
+
+model Topping {
+  id          String             @id @default(uuid()) @db.Uuid
+  name        String             @db.VarChar(120)
+  price       Int
+  active      Boolean            @default(true)
+  products    ProductTopping[]
+  orderItems  OrderItemTopping[]
+}
+
+model ProductTopping {
+  productId String  @db.Uuid
+  toppingId String  @db.Uuid
+  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+  topping   Topping @relation(fields: [toppingId], references: [id], onDelete: Restrict)
+  @@id([productId, toppingId])
+}
+
+model Promotion {
+  id          String        @id @default(uuid()) @db.Uuid
+  code        String        @unique @db.VarChar(32)
+  type        PromotionType
+  value       Int
+  minSubtotal Int           @default(0)
+  maxDiscount Int?
+  maxUses     Int?
+  usedCount   Int           @default(0)
+  version     Int           @default(0)
+  startsAt    DateTime
+  endsAt      DateTime
+  active      Boolean       @default(true)
+  orders      Order[]
+}
+
+model Order {
+  id                String            @id @default(uuid()) @db.Uuid
+  code              String            @unique @db.VarChar(20)
+  userId            String            @db.Uuid
+  promotionId       String?           @db.Uuid
+  promotionCode     String?           @db.VarChar(32)
+  subtotal          Int
+  discount          Int               @default(0)
+  total             Int
+  status            OrderStatus       @default(PENDING)
+  reservationStatus ReservationStatus @default(HELD)
+  version           Int               @default(0)
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  user              User              @relation(fields: [userId], references: [id], onDelete: Restrict)
+  promotion         Promotion?        @relation(fields: [promotionId], references: [id], onDelete: Restrict)
+  items             OrderItem[]
+  payments          Payment[]
+  loyaltyEntries    LoyaltyEntry[]
+  events            OrderEvent[]
+  @@index([userId, createdAt, id])
+  @@index([status, createdAt])
+}
+
+model OrderItem {
+  id          String             @id @default(uuid()) @db.Uuid
+  orderId     String             @db.Uuid
+  productId   String             @db.Uuid
+  productName String             @db.VarChar(120)
+  size        Size
+  sizePrice   Int
+  unitPrice   Int
+  qty         Int
+  lineTotal   Int
+  order       Order              @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  product     Product            @relation(fields: [productId], references: [id], onDelete: Restrict)
+  toppings    OrderItemTopping[]
+  @@index([orderId])
+}
+
+model OrderItemTopping {
+  orderItemId String    @db.Uuid
+  toppingId   String    @db.Uuid
+  name        String    @db.VarChar(120)
+  price       Int
+  orderItem   OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
+  topping     Topping   @relation(fields: [toppingId], references: [id], onDelete: Restrict)
+  @@id([orderItemId, toppingId])
+}
+
+model Payment {
+  id                  String            @id @default(uuid()) @db.Uuid
+  orderId             String            @db.Uuid
+  idempotencyRecordId String            @unique @db.Uuid
+  idempotencyKey      String            @db.VarChar(36)
+  amount              Int
+  method              PaymentMethod
+  status              PaymentStatus
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+  order               Order             @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  idempotency         IdempotencyRecord @relation(fields: [idempotencyRecordId], references: [id], onDelete: Restrict)
+  @@index([orderId])
+}
+
+model LoyaltyEntry {
+  id        String      @id @default(uuid()) @db.Uuid
+  userId    String      @db.Uuid
+  orderId   String      @db.Uuid
+  kind      LoyaltyKind
+  points    Int
+  createdAt DateTime    @default(now())
+  user      User        @relation(fields: [userId], references: [id], onDelete: Restrict)
+  order     Order       @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  @@unique([orderId, kind])
+  @@index([userId, createdAt, id])
+}
+
+model OrderEvent {
+  id           String       @id @default(uuid()) @db.Uuid
+  orderId      String       @db.Uuid
+  actorUserId  String?      @db.Uuid
+  fromStatus   OrderStatus?
+  toStatus     OrderStatus
+  orderVersion Int
+  createdAt    DateTime     @default(now())
+  order        Order        @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  actor        User?        @relation(fields: [actorUserId], references: [id], onDelete: Restrict)
+  @@unique([orderId, orderVersion])
+}
+
+model IdempotencyRecord {
+  id          String            @id @default(uuid()) @db.Uuid
+  userId      String            @db.Uuid
+  scope       IdempotencyScope
+  key         String            @db.VarChar(36)
+  requestHash String            @db.VarChar(64)
+  status      IdempotencyStatus
+  httpStatus  Int?
+  response    Json?
+  createdAt   DateTime          @default(now())
+  user        User              @relation(fields: [userId], references: [id], onDelete: Restrict)
+  payment     Payment?
+  @@unique([userId, scope, key])
+}
