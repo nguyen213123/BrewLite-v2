@@ -38,7 +38,10 @@ jobs:
             frontend/package-lock.json
             backend/package-lock.json
       - run: npm ci
-      - run: npm run setup
+      - run: npm run docs:check
+      - run: npm --prefix backend ci
+      - run: npm run docs:schema
+      - run: npm --prefix frontend ci
       - run: npm run db:generate
       - run: npm --prefix backend run prisma:validate
       - run: npm --prefix backend run prisma:deploy

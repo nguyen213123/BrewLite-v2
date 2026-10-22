@@ -1,0 +1,2218 @@
+openapi: 3.0.3
+info:
+  title: BrewLite API
+  version: 1.0.0
+  description: >-
+    Baseline issue #1, 22/10/2026. Các endpoint nghiệp vụ là contract để triển khai, chưa có trong runtime. Chỉ /health
+    và /health/ready đã tồn tại. Đọc business-rules.md để hiểu transaction, State Machine và replay.
+servers:
+  - url: http://localhost:3001/api
+    description: Local development
+security:
+  - bearerAuth: []
+tags:
+  - name: Health
+  - name: Products
+  - name: Auth
+  - name: Orders
+  - name: Payments
+  - name: Promotions
+  - name: Loyalty
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      tags:
+        - Health
+      summary: Liveness hiện có
+      description: ''
+      responses:
+        '200':
+          description: Thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+              examples:
+                liveness:
+                  value:
+                    status: ok
+                    service: brewlite-api
+      security: []
+  /health/ready:
+    get:
+      operationId: getReadiness
+      tags:
+        - Health
+      summary: Readiness PostgreSQL hiện có
+      description: ''
+      responses:
+        '200':
+          description: Thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ready'
+              examples:
+                readiness:
+                  value:
+                    status: ok
+                    database: connected
+        '503':
+          description: Legacy NestJS error, giữ đúng runtime hiện tại
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyHealthError'
+              examples:
+                database unavailable:
+                  value:
+                    statusCode: 503
+                    message: Database unavailable
+                    error: Service Unavailable
+      security: []
+  /products:
+    get:
+      operationId: listProducts
+      tags:
+        - Products
+      summary: Danh sách sản phẩm active
+      description: >-
+        Sắp xếp createdAt ASC, id ASC. Chỉ active; vẫn trả sản phẩm stock=0 để UI hiện hết hàng. page=1, limit=12 mặc
+        định; totalPages=0 khi rỗng.
+      responses:
+        '200':
+          description: Thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductPage'
+              examples:
+                catalog:
+                  value:
+                    data:
+                      - id: 11111111-1111-4111-8111-111111111111
+                        name: Cappuccino
+                        description: Cà phê espresso và sữa
+                        price: 45000
+                        imageUrl: http://localhost:3000/images/cappuccino.jpg
+                        stock: 20
+                    meta:
+                      page: 1
+                      limit: 12
+                      total: 1
+                      totalPages: 1
+                empty catalog:
+                  value:
+                    data: []
+                    meta:
+                      page: 1
+                      limit: 12
+                      total: 0
+                      totalPages: 0
+        '400':
+          description: Dữ liệu/header không hợp lệ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Lỗi nội bộ, không lộ chi tiết DB
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+  /products/{id}:
+    get:
+      operationId: getProduct
+      tags:
+        - Products
+      summary: Chi tiết size và topping active
+      description: >-
+        Sản phẩm inactive trả 404 PRODUCT_NOT_FOUND. size S/M/L không trùng; giá S bằng price. Topping chỉ gồm loại
+        active được phép trên sản phẩm.
+      responses:
+        '200':
+          description: Thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductDetail'
+              examples:
+                detail:
+                  value:
+                    id: 11111111-1111-4111-8111-111111111111
+                    name: Cappuccino
+                    description: Cà phê espresso và sữa
+                    price: 45000
+                    imageUrl: http://localhost:3000/images/cappuccino.jpg
+                    stock: 20
+                    sizes:
+                      - size: S
+                        price: 45000
+                      - size: M
+                        price: 50000
+                      - size: L
+                        price: 55000
+                    toppings:
+                      - id: 22222222-2222-4222-8222-222222222222
+                        name: Kem
+                        price: 10000
+        '400':
+          description: Dữ liệu/header không hợp lệ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Không tồn tại hoặc không thuộc chủ đơn
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                missing product:
+                  value:
+                    statusCode: 404
+                    code: PRODUCT_NOT_FOUND
+                    message: Không tìm thấy sản phẩm
+                    details: []
+        '500':
+          description: Lỗi nội bộ, không lộ chi tiết DB
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+  /auth/register:
+    post:
+      operationId: register
+      tags:
+        - Auth
+      summary: Đăng ký CUSTOMER
+      description: Email trim/lowercase và unique; bcrypt cost 12; không cho đăng ký STAFF. 409 EMAIL_ALREADY_EXISTS.
+      responses:
+        '201':
+          description: Thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+              examples:
+                register:
+                  value:
+                    accessToken: <JWT-issued-by-backend>
+                    tokenType: Bearer
+                    expiresIn: 3600
+                    user:
+                      id: 33333333-3333-4333-8333-333333333333
+                      email: customer@example.com
+                      role: CUSTOMER
+                      loyaltyPoints: 0
+        '400':
+          description: Dữ liệu/header không hợp lệ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Xung đột trạng thái/version/tồn kho/key/lượt ưu đãi
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                duplicate email:
+                  value:
+                    statusCode: 409
+                    code: EMAIL_ALREADY_EXISTS
+                    message: Email đã được sử dụng
+                    details: []
+          headers:
+            Retry-After:
+              description: 1 khi code=IDEMPOTENCY_IN_PROGRESS, đơn vị giây.
+              schema:
+                type: integer
+                minimum: 1
+        '500':
+          description: Lỗi nội bộ, không lộ chi tiết DB
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthRequest'
+            example:
+              email: customer@example.com
+              password: DemoPass123!
+  /auth/login:
+    post:
+      operationId: login
+      tags:
+        - Auth
+      summary: Đăng nhập và cấp JWT 60 phút
+      description: Email trim/lowercase. 401 INVALID_CREDENTIALS cho email/password sai; không lộ email có tồn tại hay không.
+      responses:
+        '200':
+          description: Thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+              examples:
+                login:
+                  value:
+                    accessToken: <JWT-issued-by-backend>
+                    tokenType: Bearer
+                    expiresIn: 3600
+                    user:
+                      id: 33333333-3333-4333-8333-333333333333
+                      email: customer@example.com
+                      role: CUSTOMER
+                      loyaltyPoints: 0
+        '400':
+          description: Dữ liệu/header không hợp lệ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Thiếu/sai/hết hạn xác thực
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                invalid credentials:
+                  value:
+                    statusCode: 401
+                    code: INVALID_CREDENTIALS
+                    message: Email hoặc mật khẩu không đúng
+                    details: []
+        '500':
+          description: Lỗi nội bộ, không lộ chi tiết DB
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            example:
+              email: customer@example.com
+              password: DemoPass123!
+  /auth/me:
+    get:
+      operationId: getCurrentUser
+      tags:
+        - Auth
+      summary: User từ JWT đã xác minh
+      description: ''
+      responses:
+        '200':
+          description: Thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+              examples:
+                current user:
+                  value:
+                    id: 33333333-3333-4333-8333-333333333333
+                    email: customer@example.com
+                    role: CUSTOMER
+                    loyaltyPoints: 0
+        '401':
+          description: Thiếu/sai/hết hạn xác thực
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Lỗi nội bộ, không lộ chi tiết DB
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /orders/quote:
+    post:
+      operationId: quoteOrder
+      tags:
+        - Orders
+      summary: Tính lại giá trước checkout, không giữ tài nguyên
+      description: >-
+        Canonical cart, kiểm tra stock hiện tại/option/mã và giá. Không tạo đơn hoặc tiêu lượt mã. Khi tạo đơn kiểm tra
+        lại; quote không giữ hàng/lượt. 409 OUT_OF_STOCK/PROMOTION_EXHAUSTED.
+      responses:
+        '200':
+          description: Thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Quote'
+              examples:
+                quote:
+                  value:
+                    items:
+                      - productId: 11111111-1111-4111-8111-111111111111
+                        productName: Cappuccino
+                        size: M
+                        sizePrice: 50000
+                        toppings:
+                          - id: 22222222-2222-4222-8222-222222222222
+                            name: Kem
+                            price: 10000
+                        qty: 2
+                        unitPrice: 60000
+                        lineTotal: 120000
+                    subtotal: 120000
+                    discount: 12000
+                    total: 108000
+                    currency: VND
+                    promotionCode: SAVE10
+        '400':
+          description: Dữ liệu/header không hợp lệ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Thiếu/sai/hết hạn xác thực
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Xung đột trạng thái/version/tồn kho/key/lượt ưu đãi
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers:
+            Retry-After:
+              description: 1 khi code=IDEMPOTENCY_IN_PROGRESS, đơn vị giây.
+              schema:
+                type: integer
+                minimum: 1
+        '422':
+          description: Lựa chọn hoặc mã khuyến mãi không hợp lệ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Lỗi nội bộ, không lộ chi tiết DB
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrderRequest'
+            example:
+              items:
+                - productId: 11111111-1111-4111-8111-111111111111
+                  size: M
+                  toppingIds:
+                    - 22222222-2222-4222-8222-222222222222
+                  qty: 2
+              promotionCode: SAVE10
+  /orders:
+    post:
+      operationId: createOrder
+      tags:
+        - Orders
+      summary: Tạo đơn PENDING và giữ kho/lượt ưu đãi đúng một lần
+      description: >-
+        Bắt buộc Idempotency-Key UUID. Chuẩn hóa cart và hash payload; cùng key/payload replay 201 cùng body, key khác
+        payload 409. Transaction order+snapshot+stock optimistic locking+promo+key. Không tự tạo payment. User xác nhận
+        tổng cuối trước payment.
+      responses:
+        '201':
+          description: Thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+              examples:
+                create pending:
+                  value:
+                    id: 44444444-4444-4444-8444-444444444444
+                    code: BL-20261022-A1B2C3D4
+                    status: PENDING
+                    reservationStatus: HELD
+                    version: 0
+                    subtotal: 120000
+                    discount: 12000
+                    total: 108000
+                    currency: VND
+                    promotionCode: SAVE10
+                    createdAt: '2026-10-22T12:00:00Z'
+                    updatedAt: '2026-10-22T12:00:00Z'
+                    items:
+                      - productId: 11111111-1111-4111-8111-111111111111
+                        productName: Cappuccino
+                        size: M
+                        sizePrice: 50000
+                        toppings:
+                          - id: 22222222-2222-4222-8222-222222222222
+                            name: Kem
+                            price: 10000
+                        qty: 2
+                        unitPrice: 60000
+                        lineTotal: 120000
+                        id: 55555555-5555-4555-8555-555555555555
+                replay same order:
+                  value:
+                    id: 44444444-4444-4444-8444-444444444444
+                    code: BL-20261022-A1B2C3D4
+                    status: PENDING
+                    reservationStatus: HELD
+                    version: 0
+                    subtotal: 120000
+                    discount: 12000
+                    total: 108000
+                    currency: VND
+                    promotionCode: SAVE10
+                    createdAt: '2026-10-22T12:00:00Z'
+                    updatedAt: '2026-10-22T12:00:00Z'
+                    items:
+                      - productId: 11111111-1111-4111-8111-111111111111
+                        productName: Cappuccino
+                        size: M
+                        sizePrice: 50000
+                        toppings:
+                          - id: 22222222-2222-4222-8222-222222222222
+                            name: Kem
+                            price: 10000
+                        qty: 2
+                        unitPrice: 60000
+                        lineTotal: 120000
+                        id: 55555555-5555-4555-8555-555555555555
+          headers:
+            Idempotency-Replayed:
+              description: true khi replay, false ở lần thực hiện đầu.
+              schema:
+                type: boolean
+        '400':
+          description: Dữ liệu/header không hợp lệ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                validation error:
+                  value:
+                    statusCode: 400
+                    code: VALIDATION_ERROR
+                    message: Dữ liệu không hợp lệ
+                    details:
+                      - field: items.0.qty
+                        message: qty phải là số nguyên từ 1 đến 99
+        '401':
+          description: Thiếu/sai/hết hạn xác thực
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                unauthenticated:
+                  value:
+                    statusCode: 401
+                    code: UNAUTHORIZED
+                    message: Cần đăng nhập
+                    details: []
+        '409':
+          description: Xung đột trạng thái/version/tồn kho/key/lượt ưu đãi
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                stock exhausted:
+                  value:
+                    statusCode: 409
+                    code: OUT_OF_STOCK
+                    message: Sản phẩm không đủ tồn kho
+                    details: []
+          headers:
+            Retry-After:
+              description: 1 khi code=IDEMPOTENCY_IN_PROGRESS, đơn vị giây.
+              schema:
+                type: integer
+                minimum: 1
+        '422':
+          description: Lựa chọn hoặc mã khuyến mãi không hợp lệ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Lỗi nội bộ, không lộ chi tiết DB
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrderRequest'
+            example:
+              items:
+                - productId: 11111111-1111-4111-8111-111111111111
+                  size: M
+                  toppingIds:
+                    - 22222222-2222-4222-8222-222222222222
+                  qty: 2
+              promotionCode: SAVE10
+  /orders/me:
+    get:
+      operationId: listMyOrders
+      tags:
+        - Orders
+      summary: Lịch sử đơn của user hiện tại
+      description: createdAt DESC, id DESC; page=1, limit=12 mặc định. Định nghĩa route tĩnh /me và /quote trước /:id trong NestJS.
+      responses:
+        '200':
+          description: Thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderPage'
+              examples:
+                my history:
+                  value:
+                    data:
+                      - id: 44444444-4444-4444-8444-444444444444
+                        code: BL-20261022-A1B2C3D4
+                        status: PAID
+                        reservationStatus: CONSUMED
+                        version: 1
+                        subtotal: 120000
+                        discount: 12000
+                        total: 108000
+                        currency: VND
+                        promotionCode: SAVE10
+                        createdAt: '2026-10-22T12:00:00Z'
+                        updatedAt: '2026-10-22T12:00:00Z'
+                    meta:
+                      page: 1
+                      limit: 12
+                      total: 1
+                      totalPages: 1
+        '400':
+          description: Dữ liệu/header không hợp lệ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Thiếu/sai/hết hạn xác thực
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Lỗi nội bộ, không lộ chi tiết DB
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+  /orders/{id}:
+    get:
+      operationId: getMyOrder
+      tags:
+        - Orders
+      summary: Chi tiết snapshot đơn của mình
+      description: Đơn của người khác và đơn không tồn tại đều 404 ORDER_NOT_FOUND. Nguồn trạng thái hiện tại sau retry/replay.
+      responses:
+        '200':
+          description: Thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+              examples:
+                my order:
+                  value:
+                    id: 44444444-4444-4444-8444-444444444444
+                    code: BL-20261022-A1B2C3D4
+                    status: PAID
+                    reservationStatus: CONSUMED
+                    version: 1
+                    subtotal: 120000
+                    discount: 12000
+                    total: 108000
+                    currency: VND
+                    promotionCode: SAVE10
+                    createdAt: '2026-10-22T12:00:00Z'
+                    updatedAt: '2026-10-22T12:00:00Z'
+                    items:
+                      - productId: 11111111-1111-4111-8111-111111111111
+                        productName: Cappuccino
+                        size: M
+                        sizePrice: 50000
+                        toppings:
+                          - id: 22222222-2222-4222-8222-222222222222
+                            name: Kem
+                            price: 10000
+                        qty: 2
+                        unitPrice: 60000
+                        lineTotal: 120000
+                        id: 55555555-5555-4555-8555-555555555555
+        '400':
+          description: Dữ liệu/header không hợp lệ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Thiếu/sai/hết hạn xác thực
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Không tồn tại hoặc không thuộc chủ đơn
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                other users order:
+                  value:
+                    statusCode: 404
+                    code: ORDER_NOT_FOUND
+                    message: Không tìm thấy đơn hàng
+                    details: []
+        '500':
+          description: Lỗi nội bộ, không lộ chi tiết DB
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      parameters:
+        - $ref: '#/components/parameters/Id'
+  /orders/{id}/cancel:
+    post:
+      operationId: cancelMyOrder
+      tags:
+        - Orders
+      summary: Hủy đơn của mình theo bảng trạng thái
+      description: >-
+        PENDING/PAYMENT_FAILED/PAID có cạnh tới CANCELLED. PAID phải mock refund, trả kho/promo và đảo điểm trong cùng
+        transaction. Không hủy PREPARING/READY/COMPLETED. expectedVersion cũ trả 409 ORDER_VERSION_CONFLICT; CANCELLED
+        cùng version hiện tại trả 200 không tác dụng lặp.
+      responses:
+        '200':
+          description: Thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+              examples:
+                cancel paid refunds and reverses points:
+                  value:
+                    id: 44444444-4444-4444-8444-444444444444
+                    code: BL-20261022-A1B2C3D4
+                    status: CANCELLED
+                    reservationStatus: RELEASED
+                    version: 2
+                    subtotal: 120000
+                    discount: 12000
+                    total: 108000
+                    currency: VND
+                    promotionCode: SAVE10
+                    createdAt: '2026-10-22T12:00:00Z'
+                    updatedAt: '2026-10-22T12:00:00Z'
+                    items:
+                      - productId: 11111111-1111-4111-8111-111111111111
+                        productName: Cappuccino
+                        size: M
+                        sizePrice: 50000
+                        toppings:
+                          - id: 22222222-2222-4222-8222-222222222222
+                            name: Kem
+                            price: 10000
+                        qty: 2
+                        unitPrice: 60000
+                        lineTotal: 120000
+                        id: 55555555-5555-4555-8555-555555555555
+        '400':
+          description: Dữ liệu/header không hợp lệ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Thiếu/sai/hết hạn xác thực
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Không tồn tại hoặc không thuộc chủ đơn
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Xung đột trạng thái/version/tồn kho/key/lượt ưu đãi
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers:
+            Retry-After:
+              description: 1 khi code=IDEMPOTENCY_IN_PROGRESS, đơn vị giây.
+              schema:
+                type: integer
+                minimum: 1
+        '500':
+          description: Lỗi nội bộ, không lộ chi tiết DB
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelRequest'
+            example:
+              expectedVersion: 1
+  /orders/{id}/status:
+    patch:
+      operationId: transitionOrderStatus
+      tags:
+        - Orders
+      summary: STAFF cập nhật pha chế, sẵn sàng, hoàn thành
+      description: >-
+        Chỉ STAFF (seed), không có UI barista bắt buộc. PAID→PREPARING→READY→COMPLETED, không bỏ bước. Customer nhận 403
+        FORBIDDEN. Không dùng endpoint này cho payment/cancel.
+      responses:
+        '200':
+          description: Thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+              examples:
+                staff preparing:
+                  value:
+                    id: 44444444-4444-4444-8444-444444444444
+                    code: BL-20261022-A1B2C3D4
+                    status: PREPARING
+                    reservationStatus: CONSUMED
+                    version: 2
+                    subtotal: 120000
+                    discount: 12000
+                    total: 108000
+                    currency: VND
+                    promotionCode: SAVE10
+                    createdAt: '2026-10-22T12:00:00Z'
+                    updatedAt: '2026-10-22T12:00:00Z'
+                    items:
+                      - productId: 11111111-1111-4111-8111-111111111111
+                        productName: Cappuccino
+                        size: M
+                        sizePrice: 50000
+                        toppings:
+                          - id: 22222222-2222-4222-8222-222222222222
+                            name: Kem
+                            price: 10000
+                        qty: 2
+                        unitPrice: 60000
+                        lineTotal: 120000
+                        id: 55555555-5555-4555-8555-555555555555
+        '400':
+          description: Dữ liệu/header không hợp lệ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Thiếu/sai/hết hạn xác thực
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Không có quyền STAFF
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                customer cannot change staff status:
+                  value:
+                    statusCode: 403
+                    code: FORBIDDEN
+                    message: Chức năng yêu cầu STAFF
+                    details: []
+        '404':
+          description: Không tồn tại hoặc không thuộc chủ đơn
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Xung đột trạng thái/version/tồn kho/key/lượt ưu đãi
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                staff invalid transition:
+                  value:
+                    statusCode: 409
+                    code: INVALID_ORDER_TRANSITION
+                    message: Không thể bỏ qua bước pha chế
+                    details: []
+          headers:
+            Retry-After:
+              description: 1 khi code=IDEMPOTENCY_IN_PROGRESS, đơn vị giây.
+              schema:
+                type: integer
+                minimum: 1
+        '500':
+          description: Lỗi nội bộ, không lộ chi tiết DB
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StatusRequest'
+            example:
+              expectedVersion: 1
+              status: PREPARING
+  /payments:
+    post:
+      operationId: payOrder
+      tags:
+        - Payments
+      summary: Mock Ví/Thẻ, idempotent theo user và key
+      description: >-
+        mockOutcome mặc định SUCCESS. SUCCESS và FAIL đều HTTP 200: xem payment.status/order.status. FAIL được cache;
+        muốn thử lại dùng key mới và cùng orderId. Amount từ server. Key cũ replay snapshot gốc; luôn GET order để biết
+        trạng thái hiện tại. Không nhận thông tin thẻ thật. Failed→Pending và giữ lại kho/promo nằm cùng transaction
+        retry. Order đã thanh toán với key mới trả 409 ORDER_NOT_PAYABLE.
+      responses:
+        '200':
+          description: Thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentResult'
+              examples:
+                payment succeeds:
+                  value:
+                    payment:
+                      id: 66666666-6666-4666-8666-666666666666
+                      orderId: 44444444-4444-4444-8444-444444444444
+                      idempotencyKey: 77777777-7777-4777-8777-777777777777
+                      amount: 108000
+                      method: WALLET
+                      status: SUCCEEDED
+                      createdAt: '2026-10-22T12:00:00Z'
+                      updatedAt: '2026-10-22T12:00:00Z'
+                    order:
+                      id: 44444444-4444-4444-8444-444444444444
+                      code: BL-20261022-A1B2C3D4
+                      status: PAID
+                      reservationStatus: CONSUMED
+                      version: 1
+                      subtotal: 120000
+                      discount: 12000
+                      total: 108000
+                      currency: VND
+                      promotionCode: SAVE10
+                      createdAt: '2026-10-22T12:00:00Z'
+                      updatedAt: '2026-10-22T12:00:00Z'
+                      items:
+                        - productId: 11111111-1111-4111-8111-111111111111
+                          productName: Cappuccino
+                          size: M
+                          sizePrice: 50000
+                          toppings:
+                            - id: 22222222-2222-4222-8222-222222222222
+                              name: Kem
+                              price: 10000
+                          qty: 2
+                          unitPrice: 60000
+                          lineTotal: 120000
+                          id: 55555555-5555-4555-8555-555555555555
+                    loyaltyPointsEarned: 10
+                payment fails:
+                  value:
+                    payment:
+                      id: 66666666-6666-4666-8666-666666666666
+                      orderId: 44444444-4444-4444-8444-444444444444
+                      idempotencyKey: 77777777-7777-4777-8777-777777777777
+                      amount: 108000
+                      method: WALLET
+                      status: FAILED
+                      createdAt: '2026-10-22T12:00:00Z'
+                      updatedAt: '2026-10-22T12:00:00Z'
+                    order:
+                      id: 44444444-4444-4444-8444-444444444444
+                      code: BL-20261022-A1B2C3D4
+                      status: PAYMENT_FAILED
+                      reservationStatus: RELEASED
+                      version: 1
+                      subtotal: 120000
+                      discount: 12000
+                      total: 108000
+                      currency: VND
+                      promotionCode: SAVE10
+                      createdAt: '2026-10-22T12:00:00Z'
+                      updatedAt: '2026-10-22T12:00:00Z'
+                      items:
+                        - productId: 11111111-1111-4111-8111-111111111111
+                          productName: Cappuccino
+                          size: M
+                          sizePrice: 50000
+                          toppings:
+                            - id: 22222222-2222-4222-8222-222222222222
+                              name: Kem
+                              price: 10000
+                          qty: 2
+                          unitPrice: 60000
+                          lineTotal: 120000
+                          id: 55555555-5555-4555-8555-555555555555
+                    loyaltyPointsEarned: 0
+                payment replay:
+                  value:
+                    payment:
+                      id: 66666666-6666-4666-8666-666666666666
+                      orderId: 44444444-4444-4444-8444-444444444444
+                      idempotencyKey: 77777777-7777-4777-8777-777777777777
+                      amount: 108000
+                      method: WALLET
+                      status: SUCCEEDED
+                      createdAt: '2026-10-22T12:00:00Z'
+                      updatedAt: '2026-10-22T12:00:00Z'
+                    order:
+                      id: 44444444-4444-4444-8444-444444444444
+                      code: BL-20261022-A1B2C3D4
+                      status: PAID
+                      reservationStatus: CONSUMED
+                      version: 1
+                      subtotal: 120000
+                      discount: 12000
+                      total: 108000
+                      currency: VND
+                      promotionCode: SAVE10
+                      createdAt: '2026-10-22T12:00:00Z'
+                      updatedAt: '2026-10-22T12:00:00Z'
+                      items:
+                        - productId: 11111111-1111-4111-8111-111111111111
+                          productName: Cappuccino
+                          size: M
+                          sizePrice: 50000
+                          toppings:
+                            - id: 22222222-2222-4222-8222-222222222222
+                              name: Kem
+                              price: 10000
+                          qty: 2
+                          unitPrice: 60000
+                          lineTotal: 120000
+                          id: 55555555-5555-4555-8555-555555555555
+                    loyaltyPointsEarned: 10
+                failed payment replay:
+                  value:
+                    payment:
+                      id: 66666666-6666-4666-8666-666666666666
+                      orderId: 44444444-4444-4444-8444-444444444444
+                      idempotencyKey: 77777777-7777-4777-8777-777777777777
+                      amount: 108000
+                      method: WALLET
+                      status: FAILED
+                      createdAt: '2026-10-22T12:00:00Z'
+                      updatedAt: '2026-10-22T12:00:00Z'
+                    order:
+                      id: 44444444-4444-4444-8444-444444444444
+                      code: BL-20261022-A1B2C3D4
+                      status: PAYMENT_FAILED
+                      reservationStatus: RELEASED
+                      version: 1
+                      subtotal: 120000
+                      discount: 12000
+                      total: 108000
+                      currency: VND
+                      promotionCode: SAVE10
+                      createdAt: '2026-10-22T12:00:00Z'
+                      updatedAt: '2026-10-22T12:00:00Z'
+                      items:
+                        - productId: 11111111-1111-4111-8111-111111111111
+                          productName: Cappuccino
+                          size: M
+                          sizePrice: 50000
+                          toppings:
+                            - id: 22222222-2222-4222-8222-222222222222
+                              name: Kem
+                              price: 10000
+                          qty: 2
+                          unitPrice: 60000
+                          lineTotal: 120000
+                          id: 55555555-5555-4555-8555-555555555555
+                    loyaltyPointsEarned: 0
+                retry failed order with new payment key:
+                  value:
+                    payment:
+                      id: aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa
+                      orderId: 44444444-4444-4444-8444-444444444444
+                      idempotencyKey: 99999999-9999-4999-8999-999999999999
+                      amount: 108000
+                      method: WALLET
+                      status: SUCCEEDED
+                      createdAt: '2026-10-22T12:00:00Z'
+                      updatedAt: '2026-10-22T12:00:00Z'
+                    order:
+                      id: 44444444-4444-4444-8444-444444444444
+                      code: BL-20261022-A1B2C3D4
+                      status: PAID
+                      reservationStatus: CONSUMED
+                      version: 3
+                      subtotal: 120000
+                      discount: 12000
+                      total: 108000
+                      currency: VND
+                      promotionCode: SAVE10
+                      createdAt: '2026-10-22T12:00:00Z'
+                      updatedAt: '2026-10-22T12:00:00Z'
+                      items:
+                        - productId: 11111111-1111-4111-8111-111111111111
+                          productName: Cappuccino
+                          size: M
+                          sizePrice: 50000
+                          toppings:
+                            - id: 22222222-2222-4222-8222-222222222222
+                              name: Kem
+                              price: 10000
+                          qty: 2
+                          unitPrice: 60000
+                          lineTotal: 120000
+                          id: 55555555-5555-4555-8555-555555555555
+                    loyaltyPointsEarned: 10
+          headers:
+            Idempotency-Replayed:
+              description: true khi replay, false ở lần thực hiện đầu.
+              schema:
+                type: boolean
+        '400':
+          description: Dữ liệu/header không hợp lệ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Thiếu/sai/hết hạn xác thực
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Không tồn tại hoặc không thuộc chủ đơn
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Xung đột trạng thái/version/tồn kho/key/lượt ưu đãi
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                key conflict:
+                  value:
+                    statusCode: 409
+                    code: IDEMPOTENCY_KEY_REUSED
+                    message: Key đã được dùng với payload khác
+                    details: []
+                key in progress:
+                  value:
+                    statusCode: 409
+                    code: IDEMPOTENCY_IN_PROGRESS
+                    message: Yêu cầu đang được xử lý
+                    details: []
+          headers:
+            Retry-After:
+              description: 1 khi code=IDEMPOTENCY_IN_PROGRESS, đơn vị giây.
+              schema:
+                type: integer
+                minimum: 1
+        '422':
+          description: Lựa chọn hoặc mã khuyến mãi không hợp lệ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Lỗi nội bộ, không lộ chi tiết DB
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentRequest'
+            example:
+              orderId: 44444444-4444-4444-8444-444444444444
+              method: WALLET
+              mockOutcome: SUCCESS
+  /promotions/validate:
+    post:
+      operationId: validatePromotion
+      tags:
+        - Promotions
+      summary: Kiểm tra mã và tính giảm từ cart thật
+      description: >-
+        TV1. Code trim/uppercase, tính subtotal từ catalog, không nhận subtotal client. Không giữ lượt; hết lượt 409
+        PROMOTION_EXHAUSTED; mã sai/hết hạn/chưa đủ điều kiện 422 PROMOTION_INVALID. Dùng chung pricing service với
+        quote/create.
+      responses:
+        '200':
+          description: Thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PromotionValidation'
+              examples:
+                promotion valid:
+                  value:
+                    code: SAVE10
+                    subtotal: 120000
+                    discount: 12000
+                    total: 108000
+                    currency: VND
+        '400':
+          description: Dữ liệu/header không hợp lệ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Thiếu/sai/hết hạn xác thực
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Xung đột trạng thái/version/tồn kho/key/lượt ưu đãi
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers:
+            Retry-After:
+              description: 1 khi code=IDEMPOTENCY_IN_PROGRESS, đơn vị giây.
+              schema:
+                type: integer
+                minimum: 1
+        '422':
+          description: Lựa chọn hoặc mã khuyến mãi không hợp lệ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                promotion expired:
+                  value:
+                    statusCode: 422
+                    code: PROMOTION_INVALID
+                    message: Mã không hợp lệ hoặc không đủ điều kiện
+                    details: []
+        '500':
+          description: Lỗi nội bộ, không lộ chi tiết DB
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PromotionValidationRequest'
+            example:
+              code: SAVE10
+              items:
+                - productId: 11111111-1111-4111-8111-111111111111
+                  size: M
+                  toppingIds:
+                    - 22222222-2222-4222-8222-222222222222
+                  qty: 2
+  /loyalty/me:
+    get:
+      operationId: getMyLoyalty
+      tags:
+        - Loyalty
+      summary: Số dư điểm của user hiện tại
+      description: TV4. MVP chỉ tích điểm sau PAID, floor(total/10000); đảo khi hủy PAID hợp lệ. Không có đổi điểm lấy tiền.
+      responses:
+        '200':
+          description: Thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoyaltyBalance'
+              examples:
+                loyalty balance:
+                  value:
+                    points: 10
+                    earnRateVnd: 10000
+        '401':
+          description: Thiếu/sai/hết hạn xác thực
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Lỗi nội bộ, không lộ chi tiết DB
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /loyalty/me/entries:
+    get:
+      operationId: listMyLoyaltyEntries
+      tags:
+        - Loyalty
+      summary: Lịch sử cộng/đảo điểm của mình
+      description: createdAt DESC, id DESC, page=1 limit=12. Entry EARN >=0; REVERSE bằng âm entry EARN của cùng đơn.
+      responses:
+        '200':
+          description: Thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoyaltyPage'
+              examples:
+                loyalty history:
+                  value:
+                    data:
+                      - id: 88888888-8888-4888-8888-888888888888
+                        orderId: 44444444-4444-4444-8444-444444444444
+                        kind: EARN
+                        points: 10
+                        createdAt: '2026-10-22T12:00:00Z'
+                    meta:
+                      page: 1
+                      limit: 12
+                      total: 1
+                      totalPages: 1
+        '400':
+          description: Dữ liệu/header không hợp lệ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Thiếu/sai/hết hạn xác thực
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Lỗi nội bộ, không lộ chi tiết DB
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    Page:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 50
+        default: 12
+    Id:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        format: uuid
+  schemas:
+    OrderStatus:
+      type: string
+      enum:
+        - PENDING
+        - PAID
+        - PREPARING
+        - READY
+        - COMPLETED
+        - PAYMENT_FAILED
+        - CANCELLED
+    Size:
+      type: string
+      enum:
+        - S
+        - M
+        - L
+    PaymentMethod:
+      type: string
+      enum:
+        - WALLET
+        - CARD
+    Error:
+      type: object
+      additionalProperties: false
+      required:
+        - statusCode
+        - code
+        - message
+        - details
+      properties:
+        statusCode:
+          type: integer
+          minimum: 400
+          maximum: 599
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required:
+              - field
+              - message
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+    Meta:
+      type: object
+      additionalProperties: false
+      required:
+        - page
+        - limit
+        - total
+        - totalPages
+      properties:
+        page:
+          type: integer
+          minimum: 1
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 50
+        total:
+          type: integer
+          minimum: 0
+        totalPages:
+          type: integer
+          minimum: 0
+    User:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - email
+        - role
+        - loyaltyPoints
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        role:
+          type: string
+          enum:
+            - CUSTOMER
+            - STAFF
+        loyaltyPoints:
+          type: integer
+          minimum: 0
+    AuthRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        password:
+          type: string
+          minLength: 8
+          maxLength: 72
+          description: Tối thiểu 8 ký tự, tối đa 72 byte UTF-8; backend kiểm tra số byte trước bcrypt. Không trim password.
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        password:
+          type: string
+          minLength: 1
+          maxLength: 72
+          description: Không trim; giới hạn 72 byte UTF-8.
+    AuthResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - accessToken
+        - tokenType
+        - expiresIn
+        - user
+      properties:
+        accessToken:
+          type: string
+        tokenType:
+          type: string
+          enum:
+            - Bearer
+        expiresIn:
+          type: integer
+          minimum: 3600
+          maximum: 3600
+        user:
+          $ref: '#/components/schemas/User'
+    ProductSummary:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - name
+        - description
+        - price
+        - imageUrl
+        - stock
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          maxLength: 120
+        description:
+          type: string
+          maxLength: 1000
+        price:
+          type: integer
+          minimum: 0
+          maximum: 2000000000
+        imageUrl:
+          type: string
+          format: uri
+          maxLength: 2048
+        stock:
+          type: integer
+          minimum: 0
+    Topping:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - name
+        - price
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          maxLength: 120
+        price:
+          type: integer
+          minimum: 0
+          maximum: 2000000000
+    ProductDetail:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - name
+        - description
+        - price
+        - imageUrl
+        - stock
+        - sizes
+        - toppings
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          maxLength: 120
+        description:
+          type: string
+          maxLength: 1000
+        price:
+          type: integer
+          minimum: 0
+          maximum: 2000000000
+        imageUrl:
+          type: string
+          format: uri
+          maxLength: 2048
+        stock:
+          type: integer
+          minimum: 0
+        sizes:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required:
+              - size
+              - price
+            properties:
+              size:
+                $ref: '#/components/schemas/Size'
+              price:
+                type: integer
+                minimum: 0
+                maximum: 2000000000
+          minItems: 3
+          maxItems: 3
+        toppings:
+          type: array
+          items:
+            $ref: '#/components/schemas/Topping'
+    ProductPage:
+      type: object
+      additionalProperties: false
+      required:
+        - data
+        - meta
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProductSummary'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    CartItem:
+      type: object
+      additionalProperties: false
+      required:
+        - productId
+        - size
+        - qty
+      properties:
+        productId:
+          type: string
+          format: uuid
+        size:
+          $ref: '#/components/schemas/Size'
+        toppingIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+          maxItems: 10
+          uniqueItems: true
+          default: []
+        qty:
+          type: integer
+          minimum: 1
+          maximum: 99
+    OrderRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CartItem'
+          minItems: 1
+          maxItems: 50
+        promotionCode:
+          type: string
+          minLength: 3
+          maxLength: 32
+          description: Trim và uppercase trước khi validate pattern mã.
+    QuoteItem:
+      type: object
+      additionalProperties: false
+      required:
+        - productId
+        - productName
+        - size
+        - sizePrice
+        - toppings
+        - qty
+        - unitPrice
+        - lineTotal
+      properties:
+        productId:
+          type: string
+          format: uuid
+        productName:
+          type: string
+        size:
+          $ref: '#/components/schemas/Size'
+        sizePrice:
+          type: integer
+          minimum: 0
+          maximum: 2000000000
+        toppings:
+          type: array
+          items:
+            $ref: '#/components/schemas/Topping'
+        qty:
+          type: integer
+          minimum: 1
+          maximum: 99
+        unitPrice:
+          type: integer
+          minimum: 0
+          maximum: 2000000000
+        lineTotal:
+          type: integer
+          minimum: 0
+          maximum: 2000000000
+    Quote:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - subtotal
+        - discount
+        - total
+        - currency
+        - promotionCode
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuoteItem'
+          minItems: 1
+          maxItems: 50
+        subtotal:
+          type: integer
+          minimum: 0
+          maximum: 2000000000
+        discount:
+          type: integer
+          minimum: 0
+          maximum: 2000000000
+        total:
+          type: integer
+          minimum: 0
+          maximum: 2000000000
+        currency:
+          type: string
+          enum:
+            - VND
+        promotionCode:
+          type: string
+          pattern: ^[A-Z0-9_-]{3,32}$
+          nullable: true
+    OrderItem:
+      type: object
+      additionalProperties: false
+      required:
+        - productId
+        - productName
+        - size
+        - sizePrice
+        - toppings
+        - qty
+        - unitPrice
+        - lineTotal
+        - id
+      properties:
+        productId:
+          type: string
+          format: uuid
+        productName:
+          type: string
+        size:
+          $ref: '#/components/schemas/Size'
+        sizePrice:
+          type: integer
+          minimum: 0
+          maximum: 2000000000
+        toppings:
+          type: array
+          items:
+            $ref: '#/components/schemas/Topping'
+        qty:
+          type: integer
+          minimum: 1
+          maximum: 99
+        unitPrice:
+          type: integer
+          minimum: 0
+          maximum: 2000000000
+        lineTotal:
+          type: integer
+          minimum: 0
+          maximum: 2000000000
+        id:
+          type: string
+          format: uuid
+    OrderSummary:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - code
+        - status
+        - reservationStatus
+        - version
+        - subtotal
+        - discount
+        - total
+        - currency
+        - promotionCode
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        code:
+          type: string
+          pattern: ^BL-[0-9]{8}-[A-F0-9]{8}$
+        status:
+          $ref: '#/components/schemas/OrderStatus'
+        reservationStatus:
+          type: string
+          enum:
+            - HELD
+            - CONSUMED
+            - RELEASED
+        version:
+          type: integer
+          minimum: 0
+        subtotal:
+          type: integer
+          minimum: 0
+          maximum: 2000000000
+        discount:
+          type: integer
+          minimum: 0
+          maximum: 2000000000
+        total:
+          type: integer
+          minimum: 0
+          maximum: 2000000000
+        currency:
+          type: string
+          enum:
+            - VND
+        promotionCode:
+          type: string
+          pattern: ^[A-Z0-9_-]{3,32}$
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    Order:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - code
+        - status
+        - reservationStatus
+        - version
+        - subtotal
+        - discount
+        - total
+        - currency
+        - promotionCode
+        - createdAt
+        - updatedAt
+        - items
+      properties:
+        id:
+          type: string
+          format: uuid
+        code:
+          type: string
+          pattern: ^BL-[0-9]{8}-[A-F0-9]{8}$
+        status:
+          $ref: '#/components/schemas/OrderStatus'
+        reservationStatus:
+          type: string
+          enum:
+            - HELD
+            - CONSUMED
+            - RELEASED
+        version:
+          type: integer
+          minimum: 0
+        subtotal:
+          type: integer
+          minimum: 0
+          maximum: 2000000000
+        discount:
+          type: integer
+          minimum: 0
+          maximum: 2000000000
+        total:
+          type: integer
+          minimum: 0
+          maximum: 2000000000
+        currency:
+          type: string
+          enum:
+            - VND
+        promotionCode:
+          type: string
+          pattern: ^[A-Z0-9_-]{3,32}$
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderItem'
+          minItems: 1
+          maxItems: 50
+    OrderPage:
+      type: object
+      additionalProperties: false
+      required:
+        - data
+        - meta
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderSummary'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    CancelRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - expectedVersion
+      properties:
+        expectedVersion:
+          type: integer
+          minimum: 0
+    StatusRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - expectedVersion
+        - status
+      properties:
+        expectedVersion:
+          type: integer
+          minimum: 0
+        status:
+          type: string
+          enum:
+            - PREPARING
+            - READY
+            - COMPLETED
+    PaymentRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - orderId
+        - method
+      properties:
+        orderId:
+          type: string
+          format: uuid
+        method:
+          $ref: '#/components/schemas/PaymentMethod'
+        mockOutcome:
+          type: string
+          enum:
+            - SUCCESS
+            - FAIL
+          default: SUCCESS
+    Payment:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - orderId
+        - idempotencyKey
+        - amount
+        - method
+        - status
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        orderId:
+          type: string
+          format: uuid
+        idempotencyKey:
+          type: string
+          format: uuid
+        amount:
+          type: integer
+          minimum: 0
+          maximum: 2000000000
+        method:
+          $ref: '#/components/schemas/PaymentMethod'
+        status:
+          type: string
+          enum:
+            - SUCCEEDED
+            - FAILED
+            - REFUNDED
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    PaymentResult:
+      type: object
+      additionalProperties: false
+      required:
+        - payment
+        - order
+        - loyaltyPointsEarned
+      properties:
+        payment:
+          $ref: '#/components/schemas/Payment'
+        order:
+          $ref: '#/components/schemas/Order'
+        loyaltyPointsEarned:
+          type: integer
+          minimum: 0
+    PromotionValidationRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - code
+        - items
+      properties:
+        code:
+          type: string
+          minLength: 3
+          maxLength: 32
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CartItem'
+          minItems: 1
+          maxItems: 50
+    PromotionValidation:
+      type: object
+      additionalProperties: false
+      required:
+        - code
+        - subtotal
+        - discount
+        - total
+        - currency
+      properties:
+        code:
+          type: string
+          pattern: ^[A-Z0-9_-]{3,32}$
+        subtotal:
+          type: integer
+          minimum: 0
+          maximum: 2000000000
+        discount:
+          type: integer
+          minimum: 0
+          maximum: 2000000000
+        total:
+          type: integer
+          minimum: 0
+          maximum: 2000000000
+        currency:
+          type: string
+          enum:
+            - VND
+    LoyaltyBalance:
+      type: object
+      additionalProperties: false
+      required:
+        - points
+        - earnRateVnd
+      properties:
+        points:
+          type: integer
+          minimum: 0
+        earnRateVnd:
+          type: integer
+          minimum: 10000
+          maximum: 10000
+    LoyaltyEntry:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - orderId
+        - kind
+        - points
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        orderId:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          enum:
+            - EARN
+            - REVERSE
+        points:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+    LoyaltyPage:
+      type: object
+      additionalProperties: false
+      required:
+        - data
+        - meta
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/LoyaltyEntry'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    Health:
+      type: object
+      additionalProperties: false
+      required:
+        - status
+        - service
+      properties:
+        status:
+          type: string
+          enum:
+            - ok
+        service:
+          type: string
+          enum:
+            - brewlite-api
+    Ready:
+      type: object
+      additionalProperties: false
+      required:
+        - status
+        - database
+      properties:
+        status:
+          type: string
+          enum:
+            - ok
+        database:
+          type: string
+          enum:
+            - connected
+    LegacyHealthError:
+      type: object
+      additionalProperties: false
+      required:
+        - statusCode
+        - message
+        - error
+      properties:
+        statusCode:
+          type: integer
+          minimum: 503
+          maximum: 503
+        message:
+          type: string
+          enum:
+            - Database unavailable
+        error:
+          type: string
+          enum:
+            - Service Unavailable

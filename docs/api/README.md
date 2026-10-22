@@ -1,4 +1,4 @@
-# Hợp đồng API ban đầu
+# Hợp đồng API BrewLite v1.0.0
 
 Base URL local: `http://localhost:3001/api`. JSON UTF-8. CORS mặc định cho `http://localhost:3000`.
 
@@ -13,6 +13,80 @@ Liveness không phụ thuộc database; readiness chạy `SELECT 1`. Readiness k
 
 ValidationPipe đã bật `whitelist`, `forbidNonWhitelisted`, `transform`. Thành viên cần khai báo DTO bằng class và decorator của class-validator cho endpoint mới.
 
-## Endpoint nghiệp vụ dự kiến, chưa triển khai
+## Bộ contract cho 5 thành viên
 
-Catalog, auth, orders, payments, promotions và loyalty cần được chủ module thống nhất request/response, quyền truy cập và mã lỗi trước khi code. Không coi các module này là đã có chỉ vì đã xuất hiện trong kế hoạch.
+- [OpenAPI 3.0.3](openapi.yaml): 17 operation, schema request/response, JWT, phân trang, HTTP status và ví dụ thành công/lỗi. Mở file bằng Swagger Editor hỗ trợ OpenAPI 3.0 hoặc extension OpenAPI trong IDE. Dùng file local; không cần gửi JWT hoặc dữ liệu thật vào công cụ online.
+- [Fixture JSON](examples.json): dữ liệu catalog/mã mẫu và request/response cho frontend làm trước khi backend xong. Fixture không phải seed đang chạy hoặc tài khoản thật.
+- [Quy tắc nghiệp vụ](../requirements/business-rules.md): State Machine đầy đủ, công thức, transaction, quyền, retry và idempotency.
+- [ERD](../diagrams/erd.md), [schema Prisma tham chiếu](../diagrams/schema.prisma): quan hệ, ràng buộc, index và chủ bảng.
+- [Bàn giao cho nhóm](../requirements/team-handoff.md): issue của từng thành viên, dịch vụ cần cung cấp và thứ tự merge.
+
+Chỉ hai health endpoint đã triển khai. Các endpoint nghiệp vụ trong OpenAPI là đặc tả phải triển khai tiếp; không coi tài liệu này là code API đã chạy.
+
+## Quy ước chung
+
+- Prefix `/api`, JSON UTF-8. Request có JSON body gửi `Content-Type: application/json`.
+- JWT: `Authorization: Bearer <accessToken>`; xem chi tiết issuer/audience/expiry trong quy tắc nghiệp vụ.
+- Không bọc success bằng `data` trừ endpoint phân trang: `{ data: [...], meta: { page, limit, total, totalPages } }`. Mặc định page=1, limit=12, tối đa 50. Trang ngoài phạm vi trả data rỗng với tổng thật; dataset rỗng có totalPages=0.
+- UUID cho ID/key; timestamp UTC ISO 8601; tiền nguyên VND; size S/M/L; payment WALLET/CARD.
+- OrderRequest chỉ có items và promotionCode tùy chọn. Không dùng promotionCode=null/chuỗi rỗng; bỏ field nếu không có mã. toppingIds có thể bỏ và được chuẩn hóa thành []. Không gửi giá/userId từ client.
+- Body phải đúng schema, từ chối field thừa; query page/limit parse số nguyên rồi validate, từ chối query không được khai báo. Email và mã promo được chuẩn hóa trước validate nghiệp vụ; UUID/key viết lowercase chuẩn, password giữ nguyên.
+- `POST /orders` và `POST /payments` phải có Idempotency-Key UUID. Replay giữ HTTP status/body ban đầu, header Idempotency-Replayed=true; UI lấy lại order hiện tại sau replay.
+- Router NestJS đăng ký `/orders/me` và `/orders/quote` trước `/:id` để không nhận nhầm UUID. Không dùng history endpoint chung cho STAFF truy cập mọi khách.
+- CORS expose `Idempotency-Replayed` và `Retry-After` để frontend đọc được; allow Authorization/Content-Type/Idempotency-Key. TV4 phối hợp cập nhật setup và error filter dùng chung.
+
+## Danh mục lỗi chuẩn cho endpoint nghiệp vụ
+
+```json
+{
+  "statusCode": 400,
+  "code": "VALIDATION_ERROR",
+  "message": "Dữ liệu không hợp lệ",
+  "details": [{ "field": "items.0.qty", "message": "qty phải là số nguyên từ 1 đến 99" }]
+}
+```
+
+| HTTP | Code | Ý nghĩa |
+| --- | --- | --- |
+| 400 | VALIDATION_ERROR | Body/query/path/header sai hoặc field thừa |
+| 401 | UNAUTHORIZED / INVALID_CREDENTIALS | JWT thiếu/sai/hết hạn hoặc login sai |
+| 403 | FORBIDDEN | Customer gọi thao tác chỉ dành cho STAFF |
+| 404 | PRODUCT_NOT_FOUND / ORDER_NOT_FOUND | Không tìm thấy; đơn không thuộc user cũng dùng ORDER_NOT_FOUND |
+| 409 | EMAIL_ALREADY_EXISTS | Email chuẩn hóa đã tồn tại |
+| 409 | OUT_OF_STOCK / STOCK_CONFLICT | Không đủ stock hoặc retry optimistic locking hết lượt |
+| 409 | PROMOTION_EXHAUSTED | Mã đã hết lượt giữ/sử dụng |
+| 409 | ORDER_NOT_PAYABLE | Key payment mới cho đơn không còn trạng thái có thể thanh toán |
+| 409 | INVALID_ORDER_TRANSITION / ORDER_VERSION_CONFLICT | Cạnh trạng thái không hợp lệ hoặc expectedVersion cũ |
+| 409 | IDEMPOTENCY_KEY_REUSED | Cùng key/scope/user nhưng payload khác |
+| 409 | IDEMPOTENCY_IN_PROGRESS | Transaction key đang cạnh tranh quá timeout; Retry-After: 1 |
+| 422 | PRODUCT_UNAVAILABLE / INVALID_PRODUCT_OPTION | Product ngừng bán hoặc size/topping không hợp lệ |
+| 422 | PROMOTION_INVALID | Mã sai, ngoài thời gian hoặc chưa đủ điều kiện |
+| 500 | INTERNAL_ERROR | Lỗi ngoài dự kiến, không lộ SQL/stack/secret |
+
+details luôn là mảng (có thể rỗng). Client xử lý theo code, không parse message. Exception filter và ValidationPipe exceptionFactory cần được TV4 triển khai theo envelope này; scaffold hiện tại vẫn dùng lỗi mặc định NestJS. `/health/ready` giữ nguyên lỗi legacy 503 có statusCode/message/error như OpenAPI; không ép health đổi envelope trong bước tài liệu.
+
+## Bảng endpoint và chủ trì
+
+| Method | Path sau /api | JWT | Chủ trì |
+| --- | --- | --- | --- |
+| GET | /products, /products/{id} | Không | TV1 |
+| POST | /auth/register, /auth/login | Không | TV4 |
+| GET | /auth/me | Có | TV4 |
+| POST | /orders/quote, /orders | Có | TV3 |
+| GET | /orders/me, /orders/{id} | Có | TV3 làm dịch vụ; TV4 làm API đọc/UI lịch sử |
+| POST | /orders/{id}/cancel | Chủ đơn | TV3 |
+| PATCH | /orders/{id}/status | STAFF | TV3 |
+| POST | /payments | Chủ đơn | TV5 |
+| POST | /promotions/validate | Có | TV1 |
+| GET | /loyalty/me, /loyalty/me/entries | Có | TV4 |
+
+TV2 dùng toàn bộ contract để làm UI, không tạo một kiểu payload khác cho checkout. Các module dùng chung unit-of-work của TV3; không mở transaction riêng cho hiệu ứng cần commit cùng payment/order.
+
+## Kiểm tra contract
+
+```powershell
+npm run docs:check
+npm run docs:schema
+```
+
+docs:check kiểm tra cấu trúc OpenAPI, local references, request/response fixture, HTTP status và công thức trong fixture. Prisma validate chỉ kiểm tra tính hợp lệ schema tham chiếu, không chạy migration hoặc kiểm thử transaction. Khi thay schema runtime sau này, vẫn cần PostgreSQL integration test theo business-rules.md.
