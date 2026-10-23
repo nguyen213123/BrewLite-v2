@@ -770,6 +770,8 @@ export type PaymentCheckoutPhoneProps = {
   initialState?: number;
   order?: CheckoutOrderData;
   isDemo?: boolean;
+  mockOutcome?: 'SUCCESS' | 'FAIL';
+  onMockOutcomeChange?: (outcome: 'SUCCESS' | 'FAIL') => void;
   onExecutePayment?: (params: PaymentExecutionParams) => Promise<PaymentExecutionOutcome>;
   onVerifyOrder?: (orderId: string) => Promise<Api.Order>;
   onNotify?: (message: string) => void;
@@ -792,6 +794,8 @@ export function PaymentCheckoutPhone({
   initialState = 0,
   order,
   isDemo,
+  mockOutcome,
+  onMockOutcomeChange,
   onExecutePayment,
   onVerifyOrder,
   onNotify,
@@ -804,8 +808,8 @@ export function PaymentCheckoutPhone({
 
   const [state, setState] = useState(initialState);
   const [method, setMethod] = useState<Api.PaymentMethod>('WALLET');
-  // Mock gateway outcome is fixed to SUCCESS in the customer UI; FAIL is exercised via API/tests.
-  const outcome: 'SUCCESS' | 'FAIL' = 'SUCCESS';
+  const [internalOutcome, setInternalOutcome] = useState<'SUCCESS' | 'FAIL'>('SUCCESS');
+  const outcome = mockOutcome ?? internalOutcome;
   const [selectedPromoCode, setSelectedPromoCode] = useState<string | null>(
     order?.promotionCode !== undefined ? order.promotionCode : 'SAVE10',
   );
@@ -1036,7 +1040,9 @@ export function PaymentCheckoutPhone({
     setReplayed(false);
     setVerificationPending(false);
     setState(0);
-    notify('Đơn hàng vẫn được giữ nguyên. Bạn có thể thanh toán lại ngay.');
+    setInternalOutcome('SUCCESS');
+    onMockOutcomeChange?.('SUCCESS');
+    notify('Đã tạo khóa mới! Giỏ hàng vẫn được giữ nguyên, chuyển kịch bản sang THÀNH CÔNG để thanh toán lại.');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -1258,6 +1264,7 @@ export function PaymentCheckoutPhone({
 
 export function PaymentDesignSystemShowcase() {
   const [toast, setToast] = useState('');
+  const [demoOutcome, setDemoOutcome] = useState<'SUCCESS' | 'FAIL'>('SUCCESS');
 
   const notify = (text: string) => {
     setToast(text);
@@ -1288,12 +1295,40 @@ export function PaymentDesignSystemShowcase() {
       <div className="demo-notice-banner">
         <PaymentIcon name="info" size={16} />
         <span>
-          <strong>Chế độ thử nghiệm Demo:</strong> Trang <code>/payments</code> đang sử dụng dữ liệu mô phỏng độc lập (Cappuccino 120.000 ₫). Không tự động trừ kho hay cộng điểm thật trên cơ sở dữ liệu cho đến khi tích hợp toàn bộ hệ thống.
+          <strong>Chế độ thử nghiệm Demo:</strong> Giả lập kết quả cổng thanh toán:
         </span>
+        <div className="demo-pill-group">
+          <button
+            type="button"
+            className={`demo-pill ${demoOutcome === 'SUCCESS' ? 'active-success' : ''}`}
+            onClick={() => {
+              setDemoOutcome('SUCCESS');
+              notify('Đã chuyển sang giả lập: Thanh toán THÀNH CÔNG (SUCCESS)');
+            }}
+          >
+            ✓ Giả lập Thành công (SUCCESS)
+          </button>
+          <button
+            type="button"
+            className={`demo-pill ${demoOutcome === 'FAIL' ? 'active-fail' : ''}`}
+            onClick={() => {
+              setDemoOutcome('FAIL');
+              notify('Đã chuyển sang giả lập: Thanh toán THẤT BẠI (FAIL) để kiểm tra luồng lỗi');
+            }}
+          >
+            ✕ Giả lập Thất bại (FAIL)
+          </button>
+        </div>
       </div>
 
       <main className="brewlite-main">
-        <PaymentCheckoutPhone initialState={0} isDemo={true} onNotify={notify} />
+        <PaymentCheckoutPhone
+          initialState={0}
+          isDemo={true}
+          mockOutcome={demoOutcome}
+          onMockOutcomeChange={setDemoOutcome}
+          onNotify={notify}
+        />
       </main>
 
       {toast && (

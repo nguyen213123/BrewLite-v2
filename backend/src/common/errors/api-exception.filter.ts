@@ -13,6 +13,10 @@ export class ApiExceptionFilter implements ExceptionFilter {
         this.internalError(response);
         return;
       }
+      const errorBody = exception.getResponse() as Record<string, unknown>;
+      if (errorBody && errorBody.code === 'IDEMPOTENCY_IN_PROGRESS') {
+        response.setHeader('Retry-After', '1');
+      }
       response.status(exception.getStatus()).json(exception.getResponse());
       return;
     }
