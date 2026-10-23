@@ -1,6 +1,11 @@
+import * as fs from 'node:fs';
+import { createRequire } from 'node:module';
+import * as path from 'node:path';
+import * as vm from 'node:vm';
 import { INestApplication, Logger } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
+import * as ts from 'typescript';
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/setup';
 import { PrismaService } from '../src/prisma/prisma.service';
@@ -14,6 +19,7 @@ import type { IdempotentResult, StoredOrder, Tx } from '../src/common/contracts/
 import { IdentityPort } from '../src/common/security/security';
 import { ApiError } from '../src/common/errors/api-error';
 import { MockPaymentGatewayService } from '../src/modules/payments/mock-payment-gateway.service';
+import * as paymentApiModule from '../../frontend/src/components/payments/payment-api';
 import {
   submitPayment,
   verifyReplayedOrder,
@@ -529,9 +535,9 @@ describe('PaymentsService & POST /api/payments (#10)', () => {
     expect(loyaltyEarn).not.toHaveBeenCalled();
   });
 
-  it('rejects concurrent request in flight with 409 or 429 Retry-After', async () => {
+  it('rejects concurrent request in flight with 409 IDEMPOTENCY_IN_PROGRESS and Retry-After: 1', async () => {
     idempotencyExecute.mockRejectedValueOnce(
-      new ApiError(409, 'IDEMPOTENCY_KEY_IN_PROGRESS', 'Giao dịch đang được xử lý, vui lòng không nhấn liên tiếp'),
+      new ApiError(409, 'IDEMPOTENCY_IN_PROGRESS', 'Giao dịch đang được xử lý, vui lòng không nhấn liên tiếp'),
     );
 
     const response = await request(app.getHttpServer())
@@ -542,9 +548,10 @@ describe('PaymentsService & POST /api/payments (#10)', () => {
         orderId,
         method: 'WALLET',
       })
-      .expect(409);
+      .expect(409)
+      .expect('Retry-After', '1');
 
-    expect(response.body.code).toBe('IDEMPOTENCY_KEY_IN_PROGRESS');
+    expect(response.body.code).toBe('IDEMPOTENCY_IN_PROGRESS');
   });
 
   it('allows safe retry with the same key and payload after a network/timeout failure', async () => {
@@ -811,5 +818,580 @@ describe('Payment Client & UI Guard Tests (#10)', () => {
     expect(outcome.verified).toBe(true);
     expect(outcome.latestOrder?.status).toBe('PAID');
     expect(outcome.latestOrder?.version).toBe(1);
+  });
+});
+
+type VNode = {
+  type: unknown;
+  props: Record<string, unknown>;
+  children: unknown[];
+};
+
+type ButtonDescriptor = {
+  text: string;
+  disabled: boolean;
+  onClick?: () => unknown;
+};
+
+/**
+ * Lightweight stateful React hook & VNode test harness to mount and interact with
+ * `PaymentCheckoutPhone` and `PaymentReceiptCard` from `PaymentFlowWidget.tsx` in Node/Jest.
+ */
+function createPaymentWidgetTestHarness() {
+  let activeInstance: { hooks: unknown[]; hookIndex: number } | null = null;
+
+  const mockReact = {
+    Fragment: Symbol.for('react.fragment'),
+    createElement(type: unknown, props: Record<string, unknown> | null, ...children: unknown[]): VNode {
+      return {
+        type,
+        props: { ...(props ?? {}), children },
+        children,
+      };
+    },
+    useState<T>(initialValue: T | (() => T)): [T, (next: T | ((prev: T) => T)) => void] {
+      if (!activeInstance) {
+        throw new Error('useState called outside component render');
+      }
+      const inst = activeInstance;
+      const idx = inst.hookIndex++;
+      if (idx >= inst.hooks.length) {
+        inst.hooks.push(typeof initialValue === 'function' ? (initialValue as () => T)() : initialValue);
+      }
+      const setState = (next: T | ((prev: T) => T)) => {
+        const prev = inst.hooks[idx] as T;
+        inst.hooks[idx] = typeof next === 'function' ? (next as (prev: T) => T)(prev) : next;
+      };
+      return [inst.hooks[idx] as T, setState];
+    },
+    useRef<T>(initialValue: T): { current: T } {
+      if (!activeInstance) {
+        throw new Error('useRef called outside component render');
+      }
+      const inst = activeInstance;
+      const idx = inst.hookIndex++;
+      if (idx >= inst.hooks.length) {
+        inst.hooks.push({ current: initialValue });
+      }
+      return inst.hooks[idx] as { current: T };
+    },
+    useEffect(effect: () => void | (() => void), deps?: unknown[]): void {
+      if (!activeInstance) {
+        throw new Error('useEffect called outside component render');
+      }
+      const inst = activeInstance;
+      const idx = inst.hookIndex++;
+      const prev = inst.hooks[idx] as { deps?: unknown[] } | undefined;
+      const changed =
+        !prev ||
+        !deps ||
+        !prev.deps ||
+        deps.length !== prev.deps.length ||
+        deps.some((d, i) => !Object.is(d, prev.deps![i]));
+      if (changed) {
+        inst.hooks[idx] = { deps };
+        effect();
+      }
+    },
+  };
+
+  const widgetPath = path.resolve(__dirname, '../../frontend/src/components/payments/PaymentFlowWidget.tsx');
+  const nodeRequire = createRequire(__filename);
+  const sourceCode = fs.readFileSync(widgetPath, 'utf8');
+  const transpiled = ts.transpileModule(sourceCode, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+      jsx: ts.JsxEmit.React,
+      esModuleInterop: true,
+    },
+  }).outputText;
+
+  const moduleExports: Record<string, unknown> = {};
+  const moduleObj = { exports: moduleExports };
+  const customRequire = (id: string) => {
+    if (id === 'react') {
+      return mockReact;
+    }
+    if (id === 'next/link') {
+      return {
+        __esModule: true,
+        default: (props: Record<string, unknown>) => mockReact.createElement('a', props, props.children),
+      };
+    }
+    if (id === './payment-api') {
+      return paymentApiModule;
+    }
+    if (id.endsWith('.css')) {
+      return {};
+    }
+    return nodeRequire(id);
+  };
+
+  const fn = vm.runInThisContext(
+    `(function(exports, require, module, React) { ${transpiled}\n})`,
+    { filename: widgetPath },
+  );
+  fn(moduleExports, customRequire, moduleObj, mockReact);
+
+  const widgetModule = moduleObj.exports as {
+    PaymentCheckoutPhone: (props: Record<string, unknown>) => unknown;
+    PaymentReceiptCard: (props: Record<string, unknown>) => unknown;
+  };
+
+  function mount<P extends Record<string, unknown>>(Component: (props: P) => unknown, initialProps: P) {
+    const instances = new Map<string, { hooks: unknown[]; hookIndex: number }>();
+    let currentProps = initialProps;
+    let rootTree: unknown = null;
+
+    function evaluateNode(node: unknown, pathKey: string): unknown {
+      if (node === null || node === undefined || typeof node === 'boolean') {
+        return null;
+      }
+      if (typeof node === 'string' || typeof node === 'number') {
+        return String(node);
+      }
+      if (Array.isArray(node)) {
+        return node.map((child, idx) => evaluateNode(child, `${pathKey}.${idx}`));
+      }
+      const vnode = node as VNode;
+      if (typeof vnode.type === 'function') {
+        const compKey = `${pathKey}:${(vnode.type as { name?: string }).name || 'Anon'}`;
+        let inst = instances.get(compKey);
+        if (!inst) {
+          inst = { hooks: [], hookIndex: 0 };
+          instances.set(compKey, inst);
+        }
+        inst.hookIndex = 0;
+        const prevInst = activeInstance;
+        activeInstance = inst;
+        let rendered: unknown;
+        try {
+          rendered = (vnode.type as (p: Record<string, unknown>) => unknown)(vnode.props);
+        } finally {
+          activeInstance = prevInst;
+        }
+        return evaluateNode(rendered, compKey);
+      }
+      return {
+        type: vnode.type,
+        props: vnode.props,
+        children: vnode.children.map((child, idx) => evaluateNode(child, `${pathKey}/${idx}`)),
+      };
+    }
+
+    function collectText(node: unknown): string {
+      if (node === null || node === undefined || typeof node === 'boolean') {
+        return '';
+      }
+      if (typeof node === 'string' || typeof node === 'number') {
+        return String(node);
+      }
+      if (Array.isArray(node)) {
+        return node.map(collectText).join('');
+      }
+      const vnode = node as VNode;
+      return vnode.children.map(collectText).join('');
+    }
+
+    function collectButtons(node: unknown, acc: ButtonDescriptor[] = []): ButtonDescriptor[] {
+      if (!node || typeof node !== 'object') {
+        return acc;
+      }
+      if (Array.isArray(node)) {
+        for (const item of node) {
+          collectButtons(item, acc);
+        }
+        return acc;
+      }
+      const vnode = node as VNode;
+      if (vnode.type === 'button') {
+        acc.push({
+          text: collectText(vnode.children).replace(/\s+/g, ' ').trim(),
+          disabled: Boolean(vnode.props.disabled),
+          onClick: vnode.props.onClick as (() => unknown) | undefined,
+        });
+      }
+      for (const child of vnode.children) {
+        collectButtons(child, acc);
+      }
+      return acc;
+    }
+
+    function render(nextProps?: P) {
+      if (nextProps) {
+        currentProps = nextProps;
+      }
+      rootTree = evaluateNode(
+        mockReact.createElement(Component as unknown as string, currentProps),
+        'root',
+      );
+    }
+
+    render(initialProps);
+
+    return {
+      rerender: (nextProps?: P) => render(nextProps),
+      getText: () => collectText(rootTree).replace(/\s+/g, ' ').trim(),
+      getButtons: () => collectButtons(rootTree),
+      async clickButton(labelSubstring: string) {
+        const buttons = collectButtons(rootTree);
+        const target = buttons.find(btn => btn.text.includes(labelSubstring));
+        if (!target) {
+          throw new Error(
+            `Button containing "${labelSubstring}" not found. Available buttons: ${buttons.map(b => `"${b.text}"`).join(', ')}`,
+          );
+        }
+        if (target.disabled) {
+          throw new Error(`Button "${target.text}" is disabled`);
+        }
+        if (target.onClick) {
+          await target.onClick();
+        }
+        render();
+      },
+    };
+  }
+
+  return { widgetModule, mount };
+}
+
+describe('PaymentFlowWidget Component Render & Interaction Tests (#10)', () => {
+  const { widgetModule, mount } = createPaymentWidgetTestHarness();
+  const { PaymentCheckoutPhone, PaymentReceiptCard } = widgetModule;
+
+  it('Issue 1: renders PaymentReceiptCard and PaymentCheckoutPhone receipt using API data (amount=90000, total=90000, code, discount, method) and never falls back to 120.000₫ or demo order code', async () => {
+    const apiOrder = {
+      id: orderId,
+      code: 'BL-20261023-API90K',
+      status: 'PAID' as const,
+      reservationStatus: 'CONSUMED' as const,
+      version: 1,
+      subtotal: 105000,
+      discount: 15000,
+      total: 90000,
+      currency: 'VND' as const,
+      promotionCode: 'API15K',
+      createdAt: fixedDate.toISOString(),
+      updatedAt: fixedDate.toISOString(),
+      items: [
+        {
+          id: itemId,
+          productId,
+          productName: 'Cold Brew Cam Sả',
+          size: 'L' as const,
+          sizePrice: 55000,
+          toppings: [],
+          qty: 1,
+          unitPrice: 55000,
+          lineTotal: 55000,
+        },
+        {
+          id: '88888888-8888-4888-8888-888888888888',
+          productId,
+          productName: 'Bánh Croissant Bơ',
+          size: 'S' as const,
+          sizePrice: 50000,
+          toppings: [],
+          qty: 1,
+          unitPrice: 50000,
+          lineTotal: 50000,
+        },
+      ],
+    };
+
+    const apiPayment = {
+      id: paymentId,
+      orderId,
+      idempotencyKey,
+      amount: 90000,
+      method: 'CARD' as const,
+      status: 'SUCCEEDED' as const,
+      createdAt: fixedDate.toISOString(),
+      updatedAt: fixedDate.toISOString(),
+    };
+
+    // 1. Direct Receipt component render with API data different from demo data
+    const receiptView = mount(PaymentReceiptCard, {
+      payment: apiPayment,
+      order: apiOrder,
+      promotionCode: apiOrder.promotionCode,
+    });
+
+    const receiptText = receiptView.getText();
+    expect(receiptText).toContain('BL-20261023-API90K');
+    expect(receiptText).toContain('90.000 ₫');
+    expect(receiptText).toContain('105.000 ₫');
+    expect(receiptText).toContain('−15.000 ₫');
+    expect(receiptText).toContain('API15K');
+    expect(receiptText).toContain('Thẻ ngân hàng (CARD)');
+    expect(receiptText).toContain('SUCCEEDED');
+    // Must NOT contain hardcoded demo values
+    expect(receiptText).not.toContain('120.000 ₫');
+    expect(receiptText).not.toContain('BL-20261022-A1B2C3D4');
+    expect(receiptText).not.toContain('SAVE10');
+
+    // 2. Full PaymentCheckoutPhone integration flow where API returns payment.amount = 90000 and order.total = 90000
+    const onPaymentCommitted = jest.fn();
+    const phoneView = mount(PaymentCheckoutPhone, {
+      isDemo: false,
+      order: {
+        id: orderId,
+        code: 'BL-20261023-API90K',
+        subtotal: 105000,
+        discount: 15000,
+        total: 90000,
+        promotionCode: 'API15K',
+        items: [
+          {
+            id: itemId,
+            name: 'Cold Brew Cam Sả',
+            size: 'L',
+            toppings: [],
+            qty: 1,
+            unitPrice: 55000,
+          },
+        ],
+      },
+      onExecutePayment: async () => ({
+        result: {
+          payment: apiPayment,
+          order: apiOrder,
+          loyaltyPointsEarned: 9,
+        },
+        replayed: false,
+        latestOrder: apiOrder,
+        verified: true,
+      }),
+      onPaymentCommitted,
+    });
+
+    // Initial pending screen must show API order code and 90.000 ₫, not 120.000 ₫
+    const initialText = phoneView.getText();
+    expect(initialText).toContain('BL-20261023-API90K');
+    expect(initialText).toContain('Xác nhận thanh toán • 90.000 ₫');
+    expect(initialText).not.toContain('120.000 ₫');
+    expect(initialText).not.toContain('BL-20261022-A1B2C3D4');
+
+    // Execute payment and verify the rendered receipt screen uses API response fields
+    await phoneView.clickButton('Xác nhận thanh toán • 90.000 ₫');
+
+    const afterPayText = phoneView.getText();
+    expect(afterPayText).toContain('Thanh toán thành công');
+    expect(afterPayText).toContain('BL-20261023-API90K');
+    expect(afterPayText).toContain('90.000 ₫');
+    expect(afterPayText).toContain('−15.000 ₫');
+    expect(afterPayText).toContain('API15K');
+    expect(afterPayText).toContain('Thẻ ngân hàng (CARD)');
+    expect(afterPayText).toContain('+9 điểm');
+    expect(afterPayText).not.toContain('120.000 ₫');
+    expect(afterPayText).not.toContain('BL-20261022-A1B2C3D4');
+    expect(onPaymentCommitted).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'PAID',
+        orderStatus: 'PAID',
+        idempotencyKey: apiPayment.idempotencyKey,
+        method: 'CARD',
+        order: expect.objectContaining({ code: 'BL-20261023-API90K', total: 90000 }),
+        payment: expect.objectContaining({ amount: 90000, status: 'SUCCEEDED' }),
+        verified: true,
+      }),
+    );
+  });
+
+  it('Issue 2: treats PREPARING, READY, and COMPLETED orders with SUCCEEDED payment as paid/fulfilling during replay and retryVerification (never showing PAYMENT_FAILED, RELEASED, or retry payment button)', async () => {
+    for (const fulfillmentStatus of ['PREPARING', 'READY', 'COMPLETED'] as const) {
+      const staleSnapshotOrder = {
+        id: orderId,
+        code: `BL-20261023-${fulfillmentStatus}`,
+        status: 'PAID' as const,
+        reservationStatus: 'CONSUMED' as const,
+        version: 1,
+        subtotal: 90000,
+        discount: 0,
+        total: 90000,
+        currency: 'VND' as const,
+        promotionCode: null,
+        createdAt: fixedDate.toISOString(),
+        updatedAt: fixedDate.toISOString(),
+        items: [],
+      };
+
+      const latestOrderFromGet = {
+        ...staleSnapshotOrder,
+        status: fulfillmentStatus,
+        reservationStatus: 'CONSUMED' as const,
+        version: 2,
+      };
+
+      const succeededPayment = {
+        id: paymentId,
+        orderId,
+        idempotencyKey,
+        amount: 90000,
+        method: 'WALLET' as const,
+        status: 'SUCCEEDED' as const,
+        createdAt: fixedDate.toISOString(),
+        updatedAt: fixedDate.toISOString(),
+      };
+
+      const onPaymentCommitted = jest.fn();
+
+      const phoneView = mount(PaymentCheckoutPhone, {
+        isDemo: false,
+        order: {
+          id: orderId,
+          code: staleSnapshotOrder.code,
+          subtotal: 90000,
+          discount: 0,
+          total: 90000,
+        },
+        onExecutePayment: async () => ({
+          result: {
+            payment: succeededPayment,
+            order: staleSnapshotOrder,
+            loyaltyPointsEarned: 9,
+          },
+          replayed: true,
+          latestOrder: latestOrderFromGet,
+          verified: true,
+        }),
+        onPaymentCommitted,
+      });
+
+      await phoneView.clickButton('Xác nhận thanh toán • 90.000 ₫');
+
+      const screenText = phoneView.getText();
+      expect(screenText).toContain('Thanh toán thành công');
+      expect(screenText).toContain(fulfillmentStatus);
+      expect(screenText).toContain('CONSUMED');
+      expect(screenText).toContain('SUCCEEDED');
+      // Must NOT show PAYMENT_FAILED, RELEASED, or retry payment button
+      expect(screenText).not.toContain('PAYMENT_FAILED');
+      expect(screenText).not.toContain('RELEASED');
+      expect(screenText).not.toContain('Thanh toán thất bại');
+      expect(screenText).not.toContain('Tạo khóa mới & Thanh toán lại');
+
+      const buttonLabels = phoneView.getButtons().map(b => b.text);
+      expect(buttonLabels.some(t => t.includes('Thanh toán lại'))).toBe(false);
+
+      expect(onPaymentCommitted).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: 'PAID',
+          orderStatus: fulfillmentStatus,
+          order: expect.objectContaining({ code: staleSnapshotOrder.code }),
+          payment: expect.objectContaining({ status: 'SUCCEEDED', amount: 90000 }),
+          verified: true,
+        }),
+      );
+    }
+  });
+
+  it('Issue 3 & Issue 2: renders verification-pending notice and retry verification button when initial replay returns verified=false (state === 0), does NOT claim success or clear cart, and resolves PREPARING order via GET onVerifyOrder without re-posting payment', async () => {
+    const staleSnapshotOrder = {
+      id: orderId,
+      code: 'BL-20261023-UNVERIFIED',
+      status: 'PAID' as const,
+      reservationStatus: 'CONSUMED' as const,
+      version: 1,
+      subtotal: 90000,
+      discount: 0,
+      total: 90000,
+      currency: 'VND' as const,
+      promotionCode: null,
+      createdAt: fixedDate.toISOString(),
+      updatedAt: fixedDate.toISOString(),
+      items: [],
+    };
+
+    const succeededPayment = {
+      id: paymentId,
+      orderId,
+      idempotencyKey,
+      amount: 90000,
+      method: 'WALLET' as const,
+      status: 'SUCCEEDED' as const,
+      createdAt: fixedDate.toISOString(),
+      updatedAt: fixedDate.toISOString(),
+    };
+
+    const onExecutePayment = jest.fn().mockResolvedValue({
+      result: {
+        payment: succeededPayment,
+        order: staleSnapshotOrder,
+        loyaltyPointsEarned: 9,
+      },
+      replayed: true,
+      latestOrder: null,
+      verified: false,
+      verificationError: 'Temporary 503 on GET /orders/id',
+    });
+
+    const onVerifyOrder = jest.fn().mockResolvedValue({
+      ...staleSnapshotOrder,
+      status: 'PREPARING' as const,
+      reservationStatus: 'CONSUMED' as const,
+      version: 2,
+    });
+
+    const onPaymentCommitted = jest.fn();
+
+    const phoneView = mount(PaymentCheckoutPhone, {
+      isDemo: false,
+      order: {
+        id: orderId,
+        code: 'BL-20261023-UNVERIFIED',
+        subtotal: 90000,
+        discount: 0,
+        total: 90000,
+      },
+      onExecutePayment,
+      onVerifyOrder,
+      onPaymentCommitted,
+    });
+
+    // 1st click: POST /payments returns replayed=true, verified=false while component is at state === 0
+    await phoneView.clickButton('Xác nhận thanh toán • 90.000 ₫');
+
+    expect(onExecutePayment).toHaveBeenCalledTimes(1);
+    // Cart must NOT be cleared and payment must NOT be committed on unverified stale snapshot
+    expect(onPaymentCommitted).not.toHaveBeenCalled();
+
+    const unverifiedScreenText = phoneView.getText();
+    // Verification notice & retry verification button MUST be visible even though state is still 0
+    expect(unverifiedScreenText).toContain('Chưa xác minh được trạng thái mới nhất');
+    expect(unverifiedScreenText).toContain('Thử xác minh lại trạng thái đơn');
+    // Must NOT show success receipt or failure screen yet
+    expect(unverifiedScreenText).not.toContain('Thanh toán thành công');
+    expect(unverifiedScreenText).not.toContain('Thanh toán thất bại');
+
+    // Now click the "Thử xác minh lại trạng thái đơn" button -> calls GET /orders/{id} (onVerifyOrder) without calling POST /payments
+    await phoneView.clickButton('Thử xác minh lại trạng thái đơn');
+
+    expect(onVerifyOrder).toHaveBeenCalledTimes(1);
+    expect(onVerifyOrder).toHaveBeenCalledWith(orderId);
+    // POST /payments must NOT have been called a second time
+    expect(onExecutePayment).toHaveBeenCalledTimes(1);
+
+    const verifiedScreenText = phoneView.getText();
+    expect(verifiedScreenText).not.toContain('Chưa xác minh được trạng thái mới nhất');
+    expect(verifiedScreenText).toContain('Thanh toán thành công');
+    expect(verifiedScreenText).toContain('PREPARING');
+    expect(verifiedScreenText).toContain('CONSUMED');
+    expect(verifiedScreenText).not.toContain('PAYMENT_FAILED');
+    expect(verifiedScreenText).not.toContain('RELEASED');
+    expect(verifiedScreenText).not.toContain('Tạo khóa mới & Thanh toán lại');
+
+    // Now that GET /orders/{id} verified the order is PREPARING, onPaymentCommitted is emitted once
+    expect(onPaymentCommitted).toHaveBeenCalledTimes(1);
+    expect(onPaymentCommitted).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'PAID',
+        orderStatus: 'PREPARING',
+        order: expect.objectContaining({ code: 'BL-20261023-UNVERIFIED', status: 'PREPARING' }),
+        payment: expect.objectContaining({ status: 'SUCCEEDED', amount: 90000 }),
+        verified: true,
+      }),
+    );
   });
 });

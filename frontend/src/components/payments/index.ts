@@ -10,6 +10,9 @@ export {
 } from './payment-api';
 
 export {
+  FULFILLMENT_POSITIVE_ORDER_STATUSES,
+  isOrderPaidOrFulfilling,
+  isOrderPayableForRetry,
   PaymentBadge,
   PaymentButton,
   PaymentCheckoutPhone,
@@ -22,9 +25,11 @@ export {
   PaymentPriceSummary,
   PaymentPromotionBox,
   PaymentReceiptCard,
+  resolveReservationStatus,
   type CheckoutOrderData,
   type CheckoutOrderItem,
   type IconName,
   type PaymentCheckoutPhoneProps,
+  type PaymentCommittedPayload,
   type PaymentExecutionParams,
 } from './PaymentFlowWidget';

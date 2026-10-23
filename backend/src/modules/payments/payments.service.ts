@@ -11,13 +11,10 @@ import {
 import type { IdempotentResult, StoredOrder, Tx } from '../../common/contracts/ports';
 import type * as Api from '../../common/contracts/api.generated';
 import { ApiError } from '../../common/errors/api-error';
+import { isUniqueConstraintError } from '../idempotency/idempotency.service';
 
 function toIsoString(value: Date | string): string {
   return value instanceof Date ? value.toISOString() : String(value);
-}
-
-function isUniqueConstraintError(error: unknown): boolean {
-  return typeof error === 'object' && error !== null && 'code' in error && (error as { code?: string }).code === 'P2002';
 }
 
 function toApiOrder(order: StoredOrder): Api.Order {
