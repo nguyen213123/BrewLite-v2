@@ -1022,10 +1022,13 @@ function createPaymentWidgetTestHarness() {
       if (nextProps) {
         currentProps = nextProps;
       }
-      rootTree = evaluateNode(
-        mockReact.createElement(Component as unknown as string, currentProps),
-        'root',
-      );
+      // Two passes emulate React re-rendering after effects update state.
+      for (let pass = 0; pass < 2; pass++) {
+        rootTree = evaluateNode(
+          mockReact.createElement(Component as unknown as string, currentProps),
+          'root',
+        );
+      }
     }
 
     render(initialProps);
@@ -1393,5 +1396,123 @@ describe('PaymentFlowWidget Component Render & Interaction Tests (#10)', () => {
         verified: true,
       }),
     );
+  });
+
+  it('Retry after PAYMENT_FAILED: confirm button reappears and a 2nd attempt is sent for the same order with a NEW key and the same money snapshot', async () => {
+    const failedOrder = {
+      id: orderId,
+      code: 'BL-20261023-RETRY',
+      status: 'PAYMENT_FAILED' as const,
+      reservationStatus: 'RELEASED' as const,
+      version: 1,
+      subtotal: 105000,
+      discount: 15000,
+      total: 90000,
+      currency: 'VND' as const,
+      promotionCode: 'API15K',
+      createdAt: fixedDate.toISOString(),
+      updatedAt: fixedDate.toISOString(),
+      items: [],
+    };
+    const paidOrder = { ...failedOrder, status: 'PAID' as const, reservationStatus: 'CONSUMED' as const, version: 3 };
+    const failedPayment = {
+      id: paymentId,
+      orderId,
+      idempotencyKey,
+      amount: 90000,
+      method: 'WALLET' as const,
+      status: 'FAILED' as const,
+      createdAt: fixedDate.toISOString(),
+      updatedAt: fixedDate.toISOString(),
+    };
+
+    const onExecutePayment = jest
+      .fn()
+      .mockResolvedValueOnce({
+        result: { payment: failedPayment, order: failedOrder, loyaltyPointsEarned: 0 },
+        replayed: false,
+        latestOrder: failedOrder,
+        verified: true,
+      })
+      .mockResolvedValueOnce({
+        result: {
+          payment: { ...failedPayment, id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', status: 'SUCCEEDED' as const },
+          order: paidOrder,
+          loyaltyPointsEarned: 9,
+        },
+        replayed: false,
+        latestOrder: paidOrder,
+        verified: true,
+      });
+
+    const view = mount(PaymentCheckoutPhone, {
+      isDemo: false,
+      idempotencyKey,
+      order: { id: orderId, code: 'BL-20261023-RETRY', subtotal: 105000, discount: 15000, total: 90000, promotionCode: 'API15K' },
+      onExecutePayment,
+    });
+
+    await view.clickButton('Xác nhận thanh toán • 90.000 ₫');
+    expect(view.getText()).toContain('Thử lại thanh toán với mã mới');
+
+    await view.clickButton('Thử lại thanh toán với mã mới');
+    // Not stuck: confirm button is available again with the same money snapshot
+    expect(view.getButtons().some(b => b.text.includes('Xác nhận thanh toán • 90.000 ₫'))).toBe(true);
+    expect(view.getButtons().some(b => b.text.includes('Thử lại thanh toán với mã mới'))).toBe(false);
+
+    await view.clickButton('Xác nhận thanh toán • 90.000 ₫');
+
+    expect(onExecutePayment).toHaveBeenCalledTimes(2);
+    const [first, second] = onExecutePayment.mock.calls.map(call => call[0]);
+    expect(first.idempotencyKey).toBe(idempotencyKey);
+    expect(second.orderId).toBe(first.orderId);
+    expect(second.orderId).toBe(orderId);
+    expect(second.idempotencyKey).not.toBe(first.idempotencyKey);
+    expect(second.idempotencyKey).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+    expect(view.getText()).toContain('Thanh toán thành công');
+  });
+
+  it('Idempotency key: different orders get different keys (never the fixed demo key); technical retry keeps same key and payload', async () => {
+    const DEMO_KEY = '77777777-7777-4777-8777-777777777777';
+    const orderA = { id: orderId, code: 'BL-A', subtotal: 90000, discount: 0, total: 90000 };
+    const orderB = { id: '99999999-9999-4999-8999-999999999990', code: 'BL-B', subtotal: 50000, discount: 0, total: 50000 };
+
+    const callsA = jest.fn().mockRejectedValue(new Error('Network timeout'));
+    const callsB = jest.fn().mockRejectedValue(new Error('Network timeout'));
+    const viewA = mount(PaymentCheckoutPhone, { isDemo: false, order: orderA, onExecutePayment: callsA });
+    const viewB = mount(PaymentCheckoutPhone, { isDemo: false, order: orderB, onExecutePayment: callsB });
+
+    await viewA.clickButton('Xác nhận thanh toán • 90.000 ₫');
+    await viewB.clickButton('Xác nhận thanh toán • 50.000 ₫');
+    const keyA = callsA.mock.calls[0][0].idempotencyKey;
+    const keyB = callsB.mock.calls[0][0].idempotencyKey;
+    expect(keyA).not.toBe(keyB);
+    expect(keyA).not.toBe(DEMO_KEY);
+    expect(keyB).not.toBe(DEMO_KEY);
+
+    // Technical retry after unknown result: same key, same payload
+    await viewA.clickButton('Xác nhận thanh toán • 90.000 ₫');
+    expect(callsA).toHaveBeenCalledTimes(2);
+    expect(callsA.mock.calls[1][0]).toEqual(callsA.mock.calls[0][0]);
+
+    // Parent-provided key is respected
+    const parentKey = 'abababab-abab-4bab-8bab-abababababab';
+    const viewC = mount(PaymentCheckoutPhone, {
+      isDemo: false,
+      order: orderB,
+      idempotencyKey: parentKey,
+      onExecutePayment: callsB,
+    });
+    await viewC.clickButton('Xác nhận thanh toán • 50.000 ₫');
+    expect(callsB.mock.calls[1][0].idempotencyKey).toBe(parentKey);
+
+    // Switching the same widget to another order generates a new key
+    const rerenderCalls = jest.fn().mockRejectedValue(new Error('Network timeout'));
+    const viewD = mount(PaymentCheckoutPhone, { isDemo: false, order: orderA, onExecutePayment: rerenderCalls });
+    await viewD.clickButton('Xác nhận thanh toán • 90.000 ₫');
+    viewD.rerender({ isDemo: false, order: orderB, onExecutePayment: rerenderCalls });
+    await viewD.clickButton('Xác nhận thanh toán • 50.000 ₫');
+    expect(rerenderCalls.mock.calls[1][0].orderId).toBe(orderB.id);
+    expect(rerenderCalls.mock.calls[1][0].idempotencyKey).not.toBe(rerenderCalls.mock.calls[0][0].idempotencyKey);
   });
 });
