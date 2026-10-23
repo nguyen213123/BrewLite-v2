@@ -1,5 +1,7 @@
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import * as jwt from 'jsonwebtoken';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
@@ -14,6 +16,7 @@ describe('Order History module (Issue #12)', () => {
 
   const userA = { id: '33333333-3333-4333-8333-333333333333', email: 'userA@example.com', role: 'CUSTOMER' as const };
   const userB = { id: '44444444-4444-4444-8444-444444444444', email: 'userB@example.com', role: 'CUSTOMER' as const };
+  const userC = { id: '55555555-5555-4555-8555-555555555555', email: 'userC@example.com', role: 'CUSTOMER' as const };
 
   const tokenA = jwt.sign({ sub: userA.id, role: userA.role }, TEST_SECRET, {
     issuer: AUTH_POLICY.issuer,
@@ -26,6 +29,101 @@ describe('Order History module (Issue #12)', () => {
     audience: AUTH_POLICY.audience,
     expiresIn: 3600,
   });
+
+  const tokenC = jwt.sign({ sub: userC.id, role: userC.role }, TEST_SECRET, {
+    issuer: AUTH_POLICY.issuer,
+    audience: AUTH_POLICY.audience,
+    expiresIn: 3600,
+  });
+
+  const sharedCreatedAt = new Date('2026-10-22T10:00:00Z');
+  const userCOrders = [
+    {
+      id: '11111111-0000-4000-8000-000000000001',
+      code: 'BL-20261022-0001',
+      userId: userC.id,
+      status: 'PAID' as const,
+      reservationStatus: 'CONSUMED' as const,
+      version: 1,
+      subtotal: 50000,
+      discount: 0,
+      total: 50000,
+      currency: 'VND' as const,
+      promotionId: null,
+      promotionCode: null,
+      createdAt: sharedCreatedAt,
+      updatedAt: sharedCreatedAt,
+      items: [],
+    },
+    {
+      id: '11111111-0000-4000-8000-000000000002',
+      code: 'BL-20261022-0002',
+      userId: userC.id,
+      status: 'PAID' as const,
+      reservationStatus: 'CONSUMED' as const,
+      version: 1,
+      subtotal: 50000,
+      discount: 0,
+      total: 50000,
+      currency: 'VND' as const,
+      promotionId: null,
+      promotionCode: null,
+      createdAt: sharedCreatedAt,
+      updatedAt: sharedCreatedAt,
+      items: [],
+    },
+    {
+      id: '11111111-0000-4000-8000-000000000003',
+      code: 'BL-20261022-0003',
+      userId: userC.id,
+      status: 'PAID' as const,
+      reservationStatus: 'CONSUMED' as const,
+      version: 1,
+      subtotal: 50000,
+      discount: 0,
+      total: 50000,
+      currency: 'VND' as const,
+      promotionId: null,
+      promotionCode: null,
+      createdAt: sharedCreatedAt,
+      updatedAt: sharedCreatedAt,
+      items: [],
+    },
+    {
+      id: '11111111-0000-4000-8000-000000000004',
+      code: 'BL-20261022-0004',
+      userId: userC.id,
+      status: 'PAID' as const,
+      reservationStatus: 'CONSUMED' as const,
+      version: 1,
+      subtotal: 50000,
+      discount: 0,
+      total: 50000,
+      currency: 'VND' as const,
+      promotionId: null,
+      promotionCode: null,
+      createdAt: sharedCreatedAt,
+      updatedAt: sharedCreatedAt,
+      items: [],
+    },
+    {
+      id: '11111111-0000-4000-8000-000000000005',
+      code: 'BL-20261022-0005',
+      userId: userC.id,
+      status: 'PAID' as const,
+      reservationStatus: 'CONSUMED' as const,
+      version: 1,
+      subtotal: 50000,
+      discount: 0,
+      total: 50000,
+      currency: 'VND' as const,
+      promotionId: null,
+      promotionCode: null,
+      createdAt: sharedCreatedAt,
+      updatedAt: sharedCreatedAt,
+      items: [],
+    },
+  ];
 
   const sampleOrderA = {
     id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
@@ -89,6 +187,7 @@ describe('Order History module (Issue #12)', () => {
       findUnique: jest.fn().mockImplementation(async ({ where }: { where: { id: string } }) => {
         if (where.id === userA.id) return userA;
         if (where.id === userB.id) return userB;
+        if (where.id === userC.id) return userC;
         return null;
       }),
     },
@@ -96,16 +195,50 @@ describe('Order History module (Issue #12)', () => {
       count: jest.fn().mockImplementation(async ({ where }: { where: { userId: string } }) => {
         if (where.userId === userA.id) return 1;
         if (where.userId === userB.id) return 1;
+        if (where.userId === userC.id) return userCOrders.length;
         return 0;
       }),
-      findMany: jest.fn().mockImplementation(async ({ where }: { where: { userId: string } }) => {
-        if (where.userId === userA.id) return [sampleOrderA];
-        if (where.userId === userB.id) return [sampleOrderB];
-        return [];
+      findMany: jest.fn().mockImplementation(async (args: {
+        where: { userId: string };
+        orderBy?: Array<{ createdAt?: 'desc' | 'asc'; id?: 'desc' | 'asc' }> | { createdAt?: 'desc' | 'asc' };
+        skip?: number;
+        take?: number;
+      }) => {
+        let list: Array<typeof sampleOrderA | typeof sampleOrderB | (typeof userCOrders)[number]> = [];
+        if (args.where.userId === userA.id) list = [sampleOrderA];
+        else if (args.where.userId === userB.id) list = [sampleOrderB];
+        else if (args.where.userId === userC.id) list = [...userCOrders];
+
+        const orderByArray = (Array.isArray(args.orderBy)
+          ? args.orderBy
+          : args.orderBy
+            ? [args.orderBy]
+            : []) as Array<{ createdAt?: 'desc' | 'asc'; id?: 'desc' | 'asc' }>;
+        if (orderByArray.length > 0) {
+          list.sort((a, b) => {
+            for (const orderClause of orderByArray) {
+              if (orderClause.createdAt) {
+                const diff = b.createdAt.getTime() - a.createdAt.getTime();
+                if (diff !== 0) return orderClause.createdAt === 'desc' ? diff : -diff;
+              }
+              if (orderClause.id) {
+                const cmp = b.id.localeCompare(a.id);
+                if (cmp !== 0) return orderClause.id === 'desc' ? cmp : -cmp;
+              }
+            }
+            return 0;
+          });
+        }
+
+        const skip = args.skip ?? 0;
+        const take = args.take ?? list.length;
+        return list.slice(skip, skip + take);
       }),
       findUnique: jest.fn().mockImplementation(async ({ where }: { where: { id: string } }) => {
         if (where.id === sampleOrderA.id) return sampleOrderA;
         if (where.id === sampleOrderB.id) return sampleOrderB;
+        const userCOrder = userCOrders.find(o => o.id === where.id);
+        if (userCOrder) return userCOrder;
         return null;
       }),
     },
@@ -167,6 +300,87 @@ describe('Order History module (Issue #12)', () => {
       expect(response.body.data[0].id).toBe(sampleOrderB.id);
       expect(response.body.data[0].code).toBe(sampleOrderB.code);
       expect(response.body.data[0].status).toBe('PENDING');
+    });
+
+    it('sorts orders with identical createdAt deterministically by id DESC across pages without missing or duplicated orders', async () => {
+      // Page 1 with limit 2
+      const page1 = await request(app.getHttpServer())
+        .get('/api/orders/me?page=1&limit=2')
+        .set('Authorization', `Bearer ${tokenC}`)
+        .expect(200);
+
+      expect(page1.body.data).toHaveLength(2);
+      expect(page1.body.meta).toEqual({ page: 1, limit: 2, total: 5, totalPages: 3 });
+
+      // Page 2 with limit 2
+      const page2 = await request(app.getHttpServer())
+        .get('/api/orders/me?page=2&limit=2')
+        .set('Authorization', `Bearer ${tokenC}`)
+        .expect(200);
+
+      expect(page2.body.data).toHaveLength(2);
+      expect(page2.body.meta).toEqual({ page: 2, limit: 2, total: 5, totalPages: 3 });
+
+      // Page 3 with limit 2
+      const page3 = await request(app.getHttpServer())
+        .get('/api/orders/me?page=3&limit=2')
+        .set('Authorization', `Bearer ${tokenC}`)
+        .expect(200);
+
+      expect(page3.body.data).toHaveLength(1);
+      expect(page3.body.meta).toEqual({ page: 3, limit: 2, total: 5, totalPages: 3 });
+
+      // Verify deterministic sorting: id DESC
+      const page1Ids = page1.body.data.map((o: { id: string }) => o.id);
+      const page2Ids = page2.body.data.map((o: { id: string }) => o.id);
+      const page3Ids = page3.body.data.map((o: { id: string }) => o.id);
+
+      expect(page1Ids).toEqual([
+        '11111111-0000-4000-8000-000000000005',
+        '11111111-0000-4000-8000-000000000004',
+      ]);
+      expect(page2Ids).toEqual([
+        '11111111-0000-4000-8000-000000000003',
+        '11111111-0000-4000-8000-000000000002',
+      ]);
+      expect(page3Ids).toEqual([
+        '11111111-0000-4000-8000-000000000001',
+      ]);
+
+      const allIds = [...page1Ids, ...page2Ids, ...page3Ids];
+      expect(new Set(allIds).size).toBe(5);
+
+      // Verify prisma findMany received [{ createdAt: 'desc' }, { id: 'desc' }]
+      expect(mockPrisma.order.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        }),
+      );
+    });
+  });
+
+  describe('Direct access when unauthenticated (Issue #12 feedback)', () => {
+    it('rejects unauthenticated request to /api/orders/me with 401 UNAUTHORIZED so frontend renders login prompt without infinite loading', async () => {
+      const response = await request(app.getHttpServer())
+        .get('/api/orders/me')
+        .expect(401);
+
+      expect(response.body.code).toBe('UNAUTHORIZED');
+      expect(response.body.message).toMatch(/Cần đăng nhập|Unauthorized/i);
+    });
+
+    it('verifies frontend /orders page displays login prompt when user is not authenticated without staying in infinite loading', () => {
+      const pagePath = resolve(__dirname, '../../frontend/src/app/orders/page.tsx');
+      const pageContent = readFileSync(pagePath, 'utf8');
+
+      // Check login prompt text and link
+      expect(pageContent).toContain('Cần đăng nhập');
+      expect(pageContent).toContain('Đăng nhập ngay');
+      expect(pageContent).toContain('href="/login"');
+
+      // Ensure !user guard renders immediately instead of waiting for loading === false
+      expect(pageContent).toContain('if (!user) {');
+      expect(pageContent).not.toMatch(/if\s*\(!user\s*&&\s*!loading\)/);
     });
   });
 

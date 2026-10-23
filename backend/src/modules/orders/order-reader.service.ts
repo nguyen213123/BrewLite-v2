@@ -18,7 +18,7 @@ export class OrderReaderService implements OrderReadPort {
       this.prisma.order.count({ where: { userId } }),
       this.prisma.order.findMany({
         where: { userId },
-        orderBy: { createdAt: 'desc' },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         skip,
         take: limit,
       }),
