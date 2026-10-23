@@ -52,7 +52,7 @@ export default function OrdersHistoryPage() {
     };
   }, [user, page, refreshToken]);
 
-  if (!user && !loading) {
+  if (!user) {
     return (
       <main className="mx-auto flex min-h-[60vh] max-w-lg flex-col items-center justify-center px-6 py-16 text-center">
         <div className="rounded-full bg-[#263c30]/10 p-4 text-3xl">☕</div>
