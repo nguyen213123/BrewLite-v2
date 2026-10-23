@@ -146,6 +146,9 @@
   flex-wrap: wrap;
   gap: 12px;
   margin-bottom: 24px;
+  max-width: 680px;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .brewlite-page-title-left {
@@ -183,18 +186,20 @@
   margin: 2px 0 0;
 }
 
-/* Two-column Checkout Grid */
+/* Single-column Checkout Flow */
 .brewlite-checkout-grid {
-  display: grid;
-  grid-template-columns: 1.25fr 0.95fr;
+  display: flex;
+  flex-direction: column;
   gap: 24px;
-  align-items: start;
+  max-width: 680px;
+  width: 100%;
+  margin: 0 auto;
 }
 
 .brewlite-col {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 24px;
 }
 
 /* Cards */
@@ -838,7 +843,8 @@
 
 /* Result Container (Single Page View) */
 .brewlite-result-container {
-  max-width: 600px;
+  max-width: 680px;
+  width: 100%;
   margin: 0 auto;
   display: flex;
   flex-direction: column;

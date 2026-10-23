@@ -2,7 +2,7 @@
 
 // Owner: TV5 — #10. Single-page Cashless Payment & Result Web UI + Reusable Checkout Callbacks.
 import Link from 'next/link';
-import { useRef, useState, type ButtonHTMLAttributes, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from 'react';
 import type * as Api from '@/lib/contracts/api.generated';
 import {
   calculateExpectedLoyaltyPoints,
@@ -227,10 +227,12 @@ export function PaymentOrderSummary({
   orderCode = DEFAULT_ORDER_CODE,
   items,
   isDemo = true,
+  status = 'PENDING',
 }: {
   orderCode?: string;
   items?: CheckoutOrderItem[];
   isDemo?: boolean;
+  status?: Api.OrderStatus;
 }) {
   const displayItems: CheckoutOrderItem[] =
     items && items.length > 0
@@ -244,17 +246,26 @@ export function PaymentOrderSummary({
           },
         ];
 
+  const reservationLabel =
+    status === 'PAID' ? 'CONSUMED' : status === 'PAYMENT_FAILED' ? 'RELEASED' : 'HELD';
+
   return (
     <section className="brewlite-card">
       <div className="brewlite-card-header">
         <h2 className="brewlite-card-title">Đơn hàng của bạn</h2>
-        <PaymentBadge tone="amber">PENDING</PaymentBadge>
+        <PaymentBadge tone={status === 'PAID' ? 'green' : status === 'PAYMENT_FAILED' ? 'rose' : 'amber'}>
+          {status}
+        </PaymentBadge>
       </div>
       <div className="order-meta-bar">
         <span>
           Mã đơn: <strong className="mono">#{orderCode}</strong>
         </span>
-        <span>{isDemo ? 'Dữ liệu mô phỏng · Giữ kho: HELD' : 'Giữ kho: HELD · Phiên bản: v0'}</span>
+        <span>
+          {isDemo
+            ? `Dữ liệu mô phỏng · Giữ kho: ${reservationLabel}`
+            : `Giữ kho: ${reservationLabel} · Phiên bản: v0`}
+        </span>
       </div>
       {displayItems.map((item, idx) => (
         <div className="order-item-row" key={idx}>
@@ -543,7 +554,9 @@ export function PaymentPriceSummary({
   promotionCode = 'SAVE10',
   busy = false,
   isDemo = true,
+  status = 'PENDING',
   onConfirm,
+  onScrollToResult,
 }: {
   subtotal?: number;
   discount?: number;
@@ -551,7 +564,9 @@ export function PaymentPriceSummary({
   promotionCode?: string | null;
   busy?: boolean;
   isDemo?: boolean;
+  status?: 'PENDING' | 'PAID' | 'PAYMENT_FAILED';
   onConfirm?: () => void;
+  onScrollToResult?: () => void;
 }) {
   const effectiveDiscount = applied ? discount : 0;
   const total = Math.max(0, subtotal - effectiveDiscount);
@@ -601,7 +616,38 @@ export function PaymentPriceSummary({
         <small>10.000 ₫ = 1 điểm</small>
       </div>
 
-      {onConfirm && (
+      {status === 'PAID' ? (
+        <div style={{ marginTop: 20 }}>
+          <PaymentButton
+            type="button"
+            variant="applied"
+            onClick={onScrollToResult}
+            style={{ width: '100%', justifyContent: 'center' }}
+          >
+            <PaymentIcon name="check" size={16} />
+            Đã thanh toán • Xem biên nhận bên dưới ↓
+          </PaymentButton>
+          <div className="secure-note">
+            <PaymentIcon name="shield" size={14} />
+            <span>Đơn hàng đã được xác nhận thanh toán thành công</span>
+          </div>
+        </div>
+      ) : status === 'PAYMENT_FAILED' ? (
+        <div style={{ marginTop: 20 }}>
+          <PaymentButton
+            type="button"
+            variant="secondary"
+            onClick={onScrollToResult}
+            style={{ width: '100%', justifyContent: 'center' }}
+          >
+            Thanh toán thất bại • Xem chi tiết bên dưới ↓
+          </PaymentButton>
+          <div className="secure-note">
+            <PaymentIcon name="shield" size={14} />
+            <span>Giỏ hàng được bảo vệ, bạn có thể thử lại bên dưới</span>
+          </div>
+        </div>
+      ) : onConfirm ? (
         <div style={{ marginTop: 20 }}>
           <PaymentButton type="button" disabled={busy} onClick={onConfirm}>
             {busy ? (
@@ -620,7 +666,7 @@ export function PaymentPriceSummary({
             <span>Bảo vệ chống trừ tiền 2 lần bằng Idempotency-Key</span>
           </div>
         </div>
-      )}
+      ) : null}
     </section>
   );
 }
@@ -773,6 +819,18 @@ export function PaymentCheckoutPhone({
   const [verificationErrorText, setVerificationErrorText] = useState<string | null>(null);
   const [confirmedOrder, setConfirmedOrder] = useState<Api.Order | null>(null);
   const [earnedLoyaltyPoints, setEarnedLoyaltyPoints] = useState<number | null>(null);
+
+  const resultRef = useRef<HTMLDivElement | null>(null);
+
+  const scrollToResult = () => {
+    resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  useEffect(() => {
+    if (state !== 0 && resultRef.current) {
+      resultRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [state]);
 
   const cache = useRef(
     new Map<
@@ -968,6 +1026,9 @@ export function PaymentCheckoutPhone({
     setDetails(false);
     setReplayed(false);
     setVerificationPending(false);
+    setConfirmedOrder(null);
+    setEarnedLoyaltyPoints(null);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const retryWithNewKey = () => {
@@ -976,35 +1037,26 @@ export function PaymentCheckoutPhone({
     setVerificationPending(false);
     setState(0);
     notify('Đơn hàng vẫn được giữ nguyên. Bạn có thể thanh toán lại ngay.');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   return (
     <>
       <div className="brewlite-page-title-bar">
         <div className="brewlite-page-title-left">
-          {state !== 0 && (
-            <button
-              type="button"
-              className="brewlite-back-btn"
-              onClick={reset}
-              aria-label="Quay lại màn hình thanh toán"
-            >
-              <PaymentIcon name="arrow" size={18} />
-            </button>
-          )}
           <div>
             <h1>
               {state === 0
                 ? 'Thanh toán đơn hàng'
                 : state === 1
-                  ? 'Xác nhận thanh toán thành công'
+                  ? 'Thanh toán thành công'
                   : 'Kết quả thanh toán'}
             </h1>
             <p>
               {state === 0
                 ? 'Kiểm tra món, chọn hoặc nhập mã giảm giá và chọn phương thức thanh toán không tiền mặt.'
                 : state === 1
-                  ? 'Đơn hàng của bạn đã chuyển sang trạng thái PAID.'
+                  ? 'Đơn hàng của bạn đã chuyển sang trạng thái PAID. Xem biên nhận chi tiết bên dưới.'
                   : 'Giao dịch chưa hoàn tất — giỏ hàng và mã ưu đãi của bạn vẫn được giữ nguyên.'}
             </p>
           </div>
@@ -1014,35 +1066,38 @@ export function PaymentCheckoutPhone({
         </PaymentBadge>
       </div>
 
-      {state === 0 ? (
-        <div className="brewlite-checkout-grid">
-          <div className="brewlite-col">
-            <PaymentOrderSummary
-              orderCode={orderCode}
-              items={order?.items}
-              isDemo={isDemoMode}
-            />
-            <PaymentPromotionBox
-              subtotal={subtotal}
-              selectedCode={selectedPromoCode}
-              onSelectCode={setSelectedPromoCode}
-            />
-            <PaymentMethodSelector method={method} onMethodChange={setMethod} />
-          </div>
-          <div className="brewlite-col">
-            <PaymentPriceSummary
-              subtotal={subtotal}
-              discount={discount}
-              applied={Boolean(selectedPromoCode)}
-              promotionCode={selectedPromoCode}
-              busy={busy}
-              isDemo={isDemoMode}
-              onConfirm={pay}
-            />
-          </div>
-        </div>
-      ) : (
-        <div className="brewlite-result-container">
+      <div className="brewlite-checkout-grid">
+        <PaymentOrderSummary
+          orderCode={orderCode}
+          items={order?.items}
+          isDemo={isDemoMode}
+          status={state === 1 ? 'PAID' : state === 2 ? 'PAYMENT_FAILED' : 'PENDING'}
+        />
+        <PaymentPromotionBox
+          subtotal={subtotal}
+          selectedCode={selectedPromoCode}
+          onSelectCode={state === 0 ? setSelectedPromoCode : () => {}}
+        />
+        <PaymentMethodSelector method={method} onMethodChange={state === 0 ? setMethod : () => {}} />
+        <PaymentPriceSummary
+          subtotal={subtotal}
+          discount={discount}
+          applied={Boolean(selectedPromoCode)}
+          promotionCode={selectedPromoCode}
+          busy={busy}
+          isDemo={isDemoMode}
+          status={state === 1 ? 'PAID' : state === 2 ? 'PAYMENT_FAILED' : 'PENDING'}
+          onConfirm={pay}
+          onScrollToResult={scrollToResult}
+        />
+      </div>
+
+      {state !== 0 && (
+        <div
+          ref={resultRef}
+          className="brewlite-result-container"
+          style={{ marginTop: 40, scrollMarginTop: 90 }}
+        >
           <section className={`brewlite-card result-hero-card ${state === 2 ? 'failed' : ''}`}>
             <div className={`hero-circle ${state === 2 ? 'failed' : ''}`}>
               <PaymentIcon name={state === 1 ? 'check' : 'close'} size={34} />
@@ -1138,18 +1193,34 @@ export function PaymentCheckoutPhone({
                 <PaymentButton type="button" onClick={() => setDetails(true)}>
                   Xem chi tiết &amp; Theo dõi trạng thái đơn
                 </PaymentButton>
+                <PaymentButton
+                  type="button"
+                  variant="secondary"
+                  onClick={() => {
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                  }}
+                >
+                  <PaymentIcon name="arrow" size={16} />
+                  Cuộn lên xem lại đơn hàng ↑
+                </PaymentButton>
                 <PaymentButton type="button" variant="secondary" onClick={reset}>
-                  Quay lại trang Thanh toán
+                  Tạo đơn thanh toán mới
                 </PaymentButton>
               </>
             ) : (
               <>
                 <PaymentButton type="button" onClick={retryWithNewKey}>
                   <PaymentIcon name="refresh" size={17} />
-                  Thử lại thanh toán
+                  Thử lại thanh toán với mã mới
                 </PaymentButton>
-                <PaymentButton type="button" variant="secondary" onClick={reset}>
-                  Quay lại giỏ hàng
+                <PaymentButton
+                  type="button"
+                  variant="secondary"
+                  onClick={() => {
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                  }}
+                >
+                  Cuộn lên kiểm tra đơn ↑
                 </PaymentButton>
               </>
             )}
