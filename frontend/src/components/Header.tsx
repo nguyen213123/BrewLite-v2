@@ -25,12 +25,20 @@ export default function Header() {
             </span>
           </Link>
           {user && (
-            <Link
-              href="/orders"
-              className="text-sm font-medium text-[#263c30]/80 transition hover:text-[#263c30]"
-            >
-              Lịch sử đơn
-            </Link>
+            <div className="flex items-center gap-4 text-sm font-medium">
+              <Link
+                href="/orders"
+                className="text-[#263c30]/80 transition hover:text-[#263c30]"
+              >
+                Lịch sử đơn
+              </Link>
+              <Link
+                href="/loyalty"
+                className="text-[#263c30]/80 transition hover:text-[#263c30]"
+              >
+                Điểm thưởng
+              </Link>
+            </div>
           )}
         </div>
 
@@ -44,9 +52,12 @@ export default function Header() {
                     STAFF
                   </span>
                 )}
-                <span className="rounded-full bg-[#263c30] px-2.5 py-0.5 font-semibold text-white">
+                <Link
+                  href="/loyalty"
+                  className="rounded-full bg-[#263c30] px-2.5 py-0.5 font-semibold text-white transition hover:bg-[#1f3026]"
+                >
                   {user.loyaltyPoints} điểm
-                </span>
+                </Link>
               </div>
               <button
                 onClick={handleLogout}
