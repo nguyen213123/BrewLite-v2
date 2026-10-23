@@ -8,6 +8,7 @@ import {
   calculateExpectedLoyaltyPoints,
   createPaymentIdempotencyKey,
   formatVnd,
+  type PaymentExecutionOutcome,
 } from './payment-api';
 import './payments.css';
 
@@ -206,11 +207,43 @@ export function PaymentNotice({
 const DEFAULT_ORDER_CODE = 'BL-20261022-A1B2C3D4';
 const DEFAULT_IDEMPOTENCY_KEY = '77777777-7777-4777-8777-777777777777';
 
+export type CheckoutOrderItem = {
+  name: string;
+  quantity?: number;
+  unitPrice: number;
+  details?: string;
+};
+
+export type CheckoutOrderData = {
+  id?: string;
+  code?: string;
+  items?: CheckoutOrderItem[];
+  subtotal: number;
+  discount?: number;
+  promotionCode?: string | null;
+};
+
 export function PaymentOrderSummary({
   orderCode = DEFAULT_ORDER_CODE,
+  items,
+  isDemo = true,
 }: {
   orderCode?: string;
+  items?: CheckoutOrderItem[];
+  isDemo?: boolean;
 }) {
+  const displayItems: CheckoutOrderItem[] =
+    items && items.length > 0
+      ? items
+      : [
+          {
+            name: '2 × Cappuccino',
+            quantity: 2,
+            unitPrice: 120_000,
+            details: 'Size M (50.000 ₫ / ly) · Topping: Kem (+10.000 ₫ / ly)',
+          },
+        ];
+
   return (
     <section className="brewlite-card">
       <div className="brewlite-card-header">
@@ -221,19 +254,20 @@ export function PaymentOrderSummary({
         <span>
           Mã đơn: <strong className="mono">#{orderCode}</strong>
         </span>
-        <span>Giữ kho: HELD · Phiên bản: v0</span>
+        <span>{isDemo ? 'Dữ liệu mô phỏng · Giữ kho: HELD' : 'Giữ kho: HELD · Phiên bản: v0'}</span>
       </div>
-      <div className="order-item-row">
-        <div className="cup-thumb">
-          <PaymentIcon name="coffee" size={26} />
+      {displayItems.map((item, idx) => (
+        <div className="order-item-row" key={idx}>
+          <div className="cup-thumb">
+            <PaymentIcon name="coffee" size={26} />
+          </div>
+          <div className="item-info">
+            <strong>{item.name}</strong>
+            {item.details && <span className="item-topping-tag">{item.details}</span>}
+          </div>
+          <strong className="mono item-price">{formatVnd(item.unitPrice)}</strong>
         </div>
-        <div className="item-info">
-          <strong>2 × Cappuccino</strong>
-          <span>Size M (50.000 ₫ / ly)</span>
-          <span className="item-topping-tag">+ Topping: Kem (+10.000 ₫ / ly)</span>
-        </div>
-        <strong className="mono item-price">120.000 ₫</strong>
-      </div>
+      ))}
     </section>
   );
 }
@@ -508,6 +542,7 @@ export function PaymentPriceSummary({
   applied = true,
   promotionCode = 'SAVE10',
   busy = false,
+  isDemo = true,
   onConfirm,
 }: {
   subtotal?: number;
@@ -515,6 +550,7 @@ export function PaymentPriceSummary({
   applied?: boolean;
   promotionCode?: string | null;
   busy?: boolean;
+  isDemo?: boolean;
   onConfirm?: () => void;
 }) {
   const effectiveDiscount = applied ? discount : 0;
@@ -525,11 +561,13 @@ export function PaymentPriceSummary({
     <section className="brewlite-card">
       <div className="brewlite-card-header">
         <h2 className="brewlite-card-title">Chi tiết thanh toán</h2>
-        <span className="brewlite-card-subtitle">Tính bởi Server</span>
+        <span className="brewlite-card-subtitle">
+          {isDemo ? 'Tạm tính (Dữ liệu mô phỏng)' : 'Tính bởi Server'}
+        </span>
       </div>
       <div className="price-breakdown">
         <div className="price-row">
-          <span>Tạm tính (2 món)</span>
+          <span>Tạm tính</span>
           <span className="mono">{formatVnd(subtotal)}</span>
         </div>
         <div className="price-row">
@@ -550,7 +588,15 @@ export function PaymentPriceSummary({
       <div className="loyalty-box">
         <PaymentIcon name="star" size={16} />
         <span>
-          Tích lũy <strong>+{points} điểm thưởng</strong> sau khi đơn PAID
+          {isDemo ? (
+            <>
+              Dự kiến tích lũy <strong>+{points} điểm thưởng</strong> (Mô phỏng)
+            </>
+          ) : (
+            <>
+              Tích lũy <strong>+{points} điểm thưởng</strong> sau khi đơn PAID
+            </>
+          )}
         </span>
         <small>10.000 ₫ = 1 điểm</small>
       </div>
@@ -588,6 +634,7 @@ export function PaymentReceiptCard({
   subtotal = 120_000,
   discount = 12_000,
   idempotencyKey = DEFAULT_IDEMPOTENCY_KEY,
+  isDemo = true,
 }: {
   orderCode?: string;
   failed?: boolean;
@@ -597,6 +644,7 @@ export function PaymentReceiptCard({
   subtotal?: number;
   discount?: number;
   idempotencyKey?: string;
+  isDemo?: boolean;
 }) {
   const effectiveDiscount = applied ? discount : 0;
   const total = Math.max(0, subtotal - effectiveDiscount);
@@ -619,7 +667,13 @@ export function PaymentReceiptCard({
         </div>
         <div className="receipt-row">
           <span>Trạng thái giữ kho</span>
-          <strong className="mono">{failed ? 'RELEASED (Đã nhả kho)' : 'CONSUMED (Đã trừ kho)'}</strong>
+          <strong className="mono">
+            {failed
+              ? 'RELEASED (Chưa trừ kho)'
+              : isDemo
+                ? 'CONSUMED (Mô phỏng - Chưa trừ kho thật)'
+                : 'CONSUMED (Đã trừ kho)'}
+          </strong>
         </div>
         <div className="receipt-row">
           <span>Phương thức thanh toán</span>
@@ -629,7 +683,9 @@ export function PaymentReceiptCard({
         </div>
         <div className="receipt-row">
           <span>Trạng thái giao dịch</span>
-          <strong className="mono">{failed ? 'FAILED' : 'SUCCEEDED'}</strong>
+          <strong className="mono">
+            {failed ? 'FAILED' : isDemo ? 'SUCCEEDED (Mô phỏng)' : 'SUCCEEDED'}
+          </strong>
         </div>
         <div className="receipt-row">
           <span>Idempotency-Key</span>
@@ -657,16 +713,19 @@ export function PaymentReceiptCard({
   );
 }
 
-/**
- * Callback-driven Checkout & Payment Widget that can be embedded in TV2's checkout
- * or rendered as the standalone Payment page.
- */
-export function PaymentCheckoutPhone({
-  initialState = 0,
-  onNotify,
-  onPaymentCommitted,
-}: {
+export type PaymentExecutionParams = {
+  orderId: string;
+  method: Api.PaymentMethod;
+  idempotencyKey: string;
+  mockOutcome?: 'SUCCESS' | 'FAIL';
+};
+
+export type PaymentCheckoutPhoneProps = {
   initialState?: number;
+  order?: CheckoutOrderData;
+  isDemo?: boolean;
+  onExecutePayment?: (params: PaymentExecutionParams) => Promise<PaymentExecutionOutcome>;
+  onVerifyOrder?: (orderId: string) => Promise<Api.Order>;
   onNotify?: (message: string) => void;
   onPaymentCommitted?: (payload: {
     status: 'PAID' | 'PAYMENT_FAILED';
@@ -674,18 +733,47 @@ export function PaymentCheckoutPhone({
     mockOutcome: 'SUCCESS' | 'FAIL';
     idempotencyKey: string;
     replayed: boolean;
+    order?: Api.Order | null;
+    verified?: boolean;
   }) => void;
-}) {
-  const subtotal = 120_000;
+};
+
+/**
+ * Callback-driven Checkout & Payment Widget that can be embedded in TV2's checkout
+ * or rendered as the standalone Payment page.
+ */
+export function PaymentCheckoutPhone({
+  initialState = 0,
+  order,
+  isDemo,
+  onExecutePayment,
+  onVerifyOrder,
+  onNotify,
+  onPaymentCommitted,
+}: PaymentCheckoutPhoneProps) {
+  const isDemoMode = isDemo ?? !onExecutePayment;
+  const subtotal = order?.subtotal ?? 120_000;
+  const orderCode = order?.code ?? DEFAULT_ORDER_CODE;
+  const orderId = order?.id ?? '44444444-4444-4444-8444-444444444444';
+
   const [state, setState] = useState(initialState);
   const [method, setMethod] = useState<Api.PaymentMethod>('WALLET');
   // Mock gateway outcome is fixed to SUCCESS in the customer UI; FAIL is exercised via API/tests.
   const outcome: 'SUCCESS' | 'FAIL' = 'SUCCESS';
-  const [selectedPromoCode, setSelectedPromoCode] = useState<string | null>('SAVE10');
+  const [selectedPromoCode, setSelectedPromoCode] = useState<string | null>(
+    order?.promotionCode !== undefined ? order.promotionCode : 'SAVE10',
+  );
   const [keyValue, setKeyValue] = useState(DEFAULT_IDEMPOTENCY_KEY);
   const [busy, setBusy] = useState(false);
   const [replayed, setReplayed] = useState(false);
   const [details, setDetails] = useState(false);
+
+  // States for real API integration & replay verification
+  const [verificationPending, setVerificationPending] = useState(false);
+  const [verificationErrorText, setVerificationErrorText] = useState<string | null>(null);
+  const [confirmedOrder, setConfirmedOrder] = useState<Api.Order | null>(null);
+  const [earnedLoyaltyPoints, setEarnedLoyaltyPoints] = useState<number | null>(null);
+
   const cache = useRef(
     new Map<
       string,
@@ -706,13 +794,93 @@ export function PaymentCheckoutPhone({
   const discount = computePromotionDiscount(subtotal, activePromo);
   const totalVnd = Math.max(0, subtotal - discount);
   const totalFormatted = formatVnd(totalVnd);
-  const earnedPoints = calculateExpectedLoyaltyPoints(totalVnd);
+  const expectedPoints = calculateExpectedLoyaltyPoints(totalVnd);
+  const finalPoints = earnedLoyaltyPoints ?? expectedPoints;
 
-  const pay = () => {
+  const pay = async () => {
     if (busy) {
-      notify('Giao dịch đang xử lý. Vui lòng đợi.');
+      notify('Giao dịch đang xử lý. Vui lòng không nhấn liên tiếp.');
       return;
     }
+
+    if (onExecutePayment) {
+      setBusy(true);
+      try {
+        const executionOutcome = await onExecutePayment({
+          orderId,
+          method,
+          idempotencyKey: keyValue,
+          mockOutcome: outcome,
+        });
+
+        setBusy(false);
+        setReplayed(Boolean(executionOutcome.replayed));
+
+        if (executionOutcome.replayed && !executionOutcome.verified) {
+          setVerificationPending(true);
+          setVerificationErrorText(
+            executionOutcome.verificationError ??
+              'Giao dịch gửi lại trùng khóa nhưng chưa xác minh được trạng thái đơn mới.',
+          );
+          notify('Giao dịch trùng lặp nhưng chưa xác minh được đơn mới. Giỏ hàng chưa bị xóa.');
+          onPaymentCommitted?.({
+            status: executionOutcome.result?.order?.status === 'PAID' ? 'PAID' : 'PAYMENT_FAILED',
+            method,
+            mockOutcome: outcome,
+            idempotencyKey: keyValue,
+            replayed: true,
+            order: null, // Strictly do not trust stale snapshot
+            verified: false,
+          });
+          return;
+        }
+
+        setVerificationPending(false);
+        setVerificationErrorText(null);
+        const latest = executionOutcome.latestOrder ?? executionOutcome.result?.order ?? null;
+        setConfirmedOrder(latest);
+        if (typeof executionOutcome.result?.loyaltyPointsEarned === 'number') {
+          setEarnedLoyaltyPoints(executionOutcome.result.loyaltyPointsEarned);
+        }
+
+        if (latest?.status === 'PAID') {
+          setState(1);
+          notify(
+            executionOutcome.replayed
+              ? 'Idempotency-Replayed: true — Đơn hàng đã thanh toán trước đó, không trừ tiền 2 lần!'
+              : 'Thanh toán thành công qua API!',
+          );
+          onPaymentCommitted?.({
+            status: 'PAID',
+            method,
+            mockOutcome: outcome,
+            idempotencyKey: keyValue,
+            replayed: executionOutcome.replayed,
+            order: latest,
+            verified: true,
+          });
+        } else {
+          setState(2);
+          notify('Thanh toán thất bại từ API.');
+          onPaymentCommitted?.({
+            status: 'PAYMENT_FAILED',
+            method,
+            mockOutcome: outcome,
+            idempotencyKey: keyValue,
+            replayed: executionOutcome.replayed,
+            order: latest,
+            verified: true,
+          });
+        }
+      } catch (err: unknown) {
+        setBusy(false);
+        const msg = err instanceof Error ? err.message : 'Không thể kết nối đến máy chủ thanh toán.';
+        notify(msg);
+      }
+      return;
+    }
+
+    // Demo simulation mode
     const cached = cache.current.get(keyValue);
     if (cached) {
       if (
@@ -725,13 +893,14 @@ export function PaymentCheckoutPhone({
       }
       setState(cached.state);
       setReplayed(true);
-      notify('Idempotency-Replayed: true — Đã trả lại kết quả cũ, không trừ tiền 2 lần!');
+      notify('Idempotency-Replayed: true — Đã trả lại kết quả mô phỏng cũ, không trừ tiền 2 lần!');
       onPaymentCommitted?.({
         status: cached.state === 1 ? 'PAID' : 'PAYMENT_FAILED',
         method,
         mockOutcome: outcome,
         idempotencyKey: keyValue,
         replayed: true,
+        verified: true,
       });
       return;
     }
@@ -754,19 +923,57 @@ export function PaymentCheckoutPhone({
         mockOutcome: outcome,
         idempotencyKey: keyValue,
         replayed: false,
+        verified: true,
       });
     }, 500);
+  };
+
+  const retryVerification = async () => {
+    if (!onVerifyOrder) {
+      notify('Không có hàm xác minh đơn hàng.');
+      return;
+    }
+    setBusy(true);
+    try {
+      const fresh = await onVerifyOrder(orderId);
+      setConfirmedOrder(fresh);
+      setVerificationPending(false);
+      setVerificationErrorText(null);
+      setBusy(false);
+      if (fresh.status === 'PAID') {
+        setState(1);
+        notify('Xác minh thành công! Đơn hàng đã ở trạng thái PAID.');
+        onPaymentCommitted?.({
+          status: 'PAID',
+          method,
+          mockOutcome: outcome,
+          idempotencyKey: keyValue,
+          replayed: true,
+          order: fresh,
+          verified: true,
+        });
+      } else {
+        setState(2);
+        notify(`Xác minh hoàn tất: Đơn hàng ở trạng thái ${fresh.status}`);
+      }
+    } catch (err: unknown) {
+      setBusy(false);
+      const msg = err instanceof Error ? err.message : 'Chưa thể xác minh trạng thái đơn hàng. Vui lòng thử lại.';
+      notify(msg);
+    }
   };
 
   const reset = () => {
     setState(0);
     setDetails(false);
     setReplayed(false);
+    setVerificationPending(false);
   };
 
   const retryWithNewKey = () => {
     setKeyValue(createPaymentIdempotencyKey());
     setReplayed(false);
+    setVerificationPending(false);
     setState(0);
     notify('Đơn hàng vẫn được giữ nguyên. Bạn có thể thanh toán lại ngay.');
   };
@@ -810,7 +1017,11 @@ export function PaymentCheckoutPhone({
       {state === 0 ? (
         <div className="brewlite-checkout-grid">
           <div className="brewlite-col">
-            <PaymentOrderSummary />
+            <PaymentOrderSummary
+              orderCode={orderCode}
+              items={order?.items}
+              isDemo={isDemoMode}
+            />
             <PaymentPromotionBox
               subtotal={subtotal}
               selectedCode={selectedPromoCode}
@@ -825,6 +1036,7 @@ export function PaymentCheckoutPhone({
               applied={Boolean(selectedPromoCode)}
               promotionCode={selectedPromoCode}
               busy={busy}
+              isDemo={isDemoMode}
               onConfirm={pay}
             />
           </div>
@@ -849,10 +1061,15 @@ export function PaymentCheckoutPhone({
                 <PaymentIcon name="star" size={24} />
               </div>
               <div>
-                <strong>Bạn vừa nhận được +{earnedPoints} điểm tích lũy!</strong>
+                <strong>
+                  {isDemoMode
+                    ? `Dự kiến tích lũy +${finalPoints} điểm thưởng (Mô phỏng)`
+                    : `Bạn vừa nhận được +${finalPoints} điểm tích lũy!`}
+                </strong>
                 <p>
-                  Tổng điểm hiện tại: <b>{40 + earnedPoints} điểm</b> (Tính theo công thức
-                  floor(total / 10.000))
+                  {isDemoMode
+                    ? 'Mô phỏng theo công thức: 10.000 ₫ = 1 điểm. Hệ thống chưa cộng vào cơ sở dữ liệu thật.'
+                    : 'Đã ghi nhận điểm thưởng thành công vào tài khoản của bạn.'}
                 </p>
               </div>
             </div>
@@ -877,6 +1094,33 @@ export function PaymentCheckoutPhone({
             </PaymentNotice>
           )}
 
+          {verificationPending && (
+            <PaymentNotice tone="amber" icon="shield">
+              <strong>Chưa xác minh được trạng thái mới nhất sau Replay</strong>
+              <p>
+                Giao dịch gửi lại trùng khóa đã được xử lý trên máy chủ, nhưng hệ thống chưa thể tải trạng thái đơn hàng mới nhất để đảm bảo an toàn. Giỏ hàng và ưu đãi của bạn <strong>chưa bị xóa</strong>.
+              </p>
+              {verificationErrorText && (
+                <p className="mono" style={{ fontSize: 12, marginTop: 4 }}>
+                  {verificationErrorText}
+                </p>
+              )}
+              {onVerifyOrder && (
+                <div style={{ marginTop: 10 }}>
+                  <PaymentButton
+                    type="button"
+                    disabled={busy}
+                    onClick={retryVerification}
+                    className="compact"
+                  >
+                    <PaymentIcon name="refresh" size={14} />
+                    {busy ? 'Đang xác minh...' : 'Thử xác minh lại trạng thái đơn'}
+                  </PaymentButton>
+                </div>
+              )}
+            </PaymentNotice>
+          )}
+
           <PaymentReceiptCard
             failed={state === 2}
             method={method}
@@ -885,6 +1129,7 @@ export function PaymentCheckoutPhone({
             subtotal={subtotal}
             discount={discount}
             idempotencyKey={keyValue}
+            isDemo={isDemoMode}
           />
 
           <div className="result-actions">
@@ -917,14 +1162,18 @@ export function PaymentCheckoutPhone({
           <div className="modal-box">
             <PaymentIcon name="coffee" size={34} />
             <h3>Chi tiết đơn hàng</h3>
-            <p className="mono">#{DEFAULT_ORDER_CODE}</p>
-            <PaymentBadge tone="green">PAID → PREPARING</PaymentBadge>
+            <p className="mono">#{orderCode}</p>
+            <PaymentBadge tone="green">
+              {confirmedOrder ? `${confirmedOrder.status} (${confirmedOrder.reservationStatus})` : 'PAID (Mô phỏng)'}
+            </PaymentBadge>
             <p>
-              <strong>2 × Cappuccino (Size M)</strong> + Topping Kem
+              <strong>{order?.items?.[0]?.name ?? '2 × Cappuccino (Size M)'}</strong>
               <br />
               Tổng đã thanh toán: <strong className="mono">{totalFormatted}</strong>
               <br />
-              Quầy pha chế đã nhận đơn của bạn.
+              {isDemoMode
+                ? 'Đơn hàng thử nghiệm đã hoàn tất thanh toán ở chế độ mô phỏng.'
+                : 'Quầy pha chế đã nhận đơn của bạn.'}
             </p>
             <PaymentButton type="button" onClick={() => setDetails(false)}>
               Đóng
@@ -965,8 +1214,15 @@ export function PaymentDesignSystemShowcase() {
         </div>
       </header>
 
+      <div className="demo-notice-banner">
+        <PaymentIcon name="info" size={16} />
+        <span>
+          <strong>Chế độ thử nghiệm Demo:</strong> Trang <code>/payments</code> đang sử dụng dữ liệu mô phỏng độc lập (Cappuccino 120.000 ₫). Không tự động trừ kho hay cộng điểm thật trên cơ sở dữ liệu cho đến khi tích hợp toàn bộ hệ thống.
+        </span>
+      </div>
+
       <main className="brewlite-main">
-        <PaymentCheckoutPhone initialState={0} onNotify={notify} />
+        <PaymentCheckoutPhone initialState={0} isDemo={true} onNotify={notify} />
       </main>
 
       {toast && (

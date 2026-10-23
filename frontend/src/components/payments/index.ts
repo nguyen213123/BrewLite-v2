@@ -5,6 +5,7 @@ export {
   formatVnd,
   PaymentClientError,
   submitPayment,
+  verifyReplayedOrder,
   type PaymentExecutionOutcome,
 } from './payment-api';
 
@@ -21,5 +22,9 @@ export {
   PaymentPriceSummary,
   PaymentPromotionBox,
   PaymentReceiptCard,
+  type CheckoutOrderData,
+  type CheckoutOrderItem,
   type IconName,
+  type PaymentCheckoutPhoneProps,
+  type PaymentExecutionParams,
 } from './PaymentFlowWidget';

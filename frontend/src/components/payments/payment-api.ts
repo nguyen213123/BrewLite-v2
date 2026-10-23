@@ -1,12 +1,14 @@
 // Owner: TV5 — #10. Client API & helpers for cashless mock payment (WALLET/CARD) & Idempotency-Key.
-import type * as Api from '@/lib/contracts/api.generated';
+import type * as Api from '../../lib/contracts/api.generated';
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api';
 
 export type PaymentExecutionOutcome = {
   result: Api.PaymentResult;
   replayed: boolean;
-  latestOrder: Api.Order;
+  latestOrder: Api.Order | null;
+  verified: boolean;
+  verificationError?: string;
 };
 
 export class PaymentClientError extends Error {
@@ -109,18 +111,45 @@ export async function submitPayment(options: {
   const replayed = response.headers.get('Idempotency-Replayed') === 'true';
   const result = (await response.json()) as Api.PaymentResult;
 
-  let latestOrder = result.order;
+  let latestOrder: Api.Order | null = null;
+  let verified = true;
+  let verificationError: string | undefined;
+
   if (replayed) {
     try {
       latestOrder = await fetchCurrentOrder(payload.orderId, options.accessToken);
-    } catch {
-      latestOrder = result.order;
+      verified = true;
+    } catch (error: unknown) {
+      // Per business-rules.md 7.9: DO NOT reuse stale snapshot from result.order
+      // when fresh order status fetch fails after replay!
+      verified = false;
+      latestOrder = null;
+      verificationError =
+        error instanceof PaymentClientError
+          ? error.message
+          : 'Không thể xác minh trạng thái đơn hàng mới nhất sau khi nhận phản hồi replay.';
     }
+  } else {
+    latestOrder = result.order;
+    verified = true;
   }
 
   return {
     result,
     replayed,
     latestOrder,
+    verified,
+    verificationError,
   };
+}
+
+/**
+ * Re-attempts verification of a replayed order without re-charging.
+ */
+export async function verifyReplayedOrder(
+  orderId: string,
+  accessToken: string,
+): Promise<{ order: Api.Order; verified: boolean }> {
+  const order = await fetchCurrentOrder(orderId, accessToken);
+  return { order, verified: true };
 }
