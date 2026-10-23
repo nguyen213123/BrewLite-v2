@@ -10,7 +10,7 @@ export default function Home() {
   async function checkConnection() {
     setLoading(true);
     try {
-      const result = await apiGet<{ status: string }>('/health');
+      const result = await apiGet<{ status: string }>('/health/ready');
       setStatus(result.status === 'ok' ? 'Backend đang hoạt động' : 'Backend trả về trạng thái không hợp lệ');
     } catch {
       setStatus('Chưa kết nối được backend. Kiểm tra API và cấu hình môi trường.');
