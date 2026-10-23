@@ -172,8 +172,8 @@ describe('Default skeleton fails closed without mocked ports', () => {
   });
   it('does not decode-and-trust a token or call order handlers', async () => {
     const response = await request(app.getHttpServer()).post('/api/orders').set('Authorization', 'Bearer not-a-verified-token')
-      .set('Idempotency-Key', key).send(validOrder).expect(501);
-    expect(response.body.message).toContain('auth.verifyAccessToken');
+      .set('Idempotency-Key', key).send(validOrder).expect(401);
+    expect(response.body.code).toBe('UNAUTHORIZED');
   });
   it('still refuses a protected request without a token', async () => {
     await request(app.getHttpServer()).get('/api/orders/me').expect(401);
