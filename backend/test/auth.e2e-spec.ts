@@ -64,8 +64,15 @@ describe('Auth module (Issue #6)', () => {
       const authService = new AuthService(mockPrisma as unknown as PrismaService);
       const original = process.env.JWT_SECRET;
       try {
+        delete process.env.JWT_SECRET;
+        expect(() => authService.onModuleInit()).toThrow(
+          /JWT_SECRET must be configured with at least 32 characters/,
+        );
+
         process.env.JWT_SECRET = 'short';
-        expect(() => authService.onModuleInit()).toThrow(/JWT_SECRET must be configured with at least 32 characters/);
+        expect(() => authService.onModuleInit()).toThrow(
+          /JWT_SECRET must be configured with at least 32 characters/,
+        );
       } finally {
         process.env.JWT_SECRET = original;
       }
