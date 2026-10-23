@@ -801,7 +801,7 @@ pgIntegration('Idempotency Engine Real PostgreSQL Concurrency & lock_timeout (55
           orderId: createdOrder.id,
           method: 'WALLET',
           mockOutcome: 'SUCCESS',
-        });
+        }).then(res => res);
 
       // Wait until Request 1 has inserted the PROCESSING record and holds the PostgreSQL index lock
       await firstEnteredTx;
@@ -815,7 +815,7 @@ pgIntegration('Idempotency Engine Real PostgreSQL Concurrency & lock_timeout (55
           orderId: createdOrder.id,
           method: 'WALLET',
           mockOutcome: 'SUCCESS',
-        });
+        }).then(res => res);
 
       const [res1, res2] = await Promise.all([req1Promise, req2Promise]);
 
