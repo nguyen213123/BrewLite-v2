@@ -679,7 +679,8 @@ export function PaymentCheckoutPhone({
   const subtotal = 120_000;
   const [state, setState] = useState(initialState);
   const [method, setMethod] = useState<Api.PaymentMethod>('WALLET');
-  const [outcome, setOutcome] = useState<'SUCCESS' | 'FAIL'>('SUCCESS');
+  // Mock gateway outcome is fixed to SUCCESS in the customer UI; FAIL is exercised via API/tests.
+  const outcome: 'SUCCESS' | 'FAIL' = 'SUCCESS';
   const [selectedPromoCode, setSelectedPromoCode] = useState<string | null>('SAVE10');
   const [keyValue, setKeyValue] = useState(DEFAULT_IDEMPOTENCY_KEY);
   const [busy, setBusy] = useState(false);
@@ -706,12 +707,6 @@ export function PaymentCheckoutPhone({
   const totalVnd = Math.max(0, subtotal - discount);
   const totalFormatted = formatVnd(totalVnd);
   const earnedPoints = calculateExpectedLoyaltyPoints(totalVnd);
-
-  const newKey = () => {
-    setKeyValue(createPaymentIdempotencyKey());
-    setReplayed(false);
-    notify('Đã tạo Idempotency-Key mới cho giao dịch.');
-  };
 
   const pay = () => {
     if (busy) {
@@ -773,7 +768,7 @@ export function PaymentCheckoutPhone({
     setKeyValue(createPaymentIdempotencyKey());
     setReplayed(false);
     setState(0);
-    notify('Đã giữ nguyên đơn hàng & sinh Idempotency-Key mới để bạn thử lại thanh toán.');
+    notify('Đơn hàng vẫn được giữ nguyên. Bạn có thể thanh toán lại ngay.');
   };
 
   return (
@@ -831,13 +826,6 @@ export function PaymentCheckoutPhone({
               promotionCode={selectedPromoCode}
               busy={busy}
               onConfirm={pay}
-            />
-            <PaymentDemoControls
-              outcome={outcome}
-              onOutcomeChange={setOutcome}
-              keyValue={keyValue}
-              onNewKey={newKey}
-              onReplay={pay}
             />
           </div>
         </div>
@@ -905,10 +893,6 @@ export function PaymentCheckoutPhone({
                 <PaymentButton type="button" onClick={() => setDetails(true)}>
                   Xem chi tiết &amp; Theo dõi trạng thái đơn
                 </PaymentButton>
-                <PaymentButton type="button" variant="secondary" onClick={pay}>
-                  <PaymentIcon name="layers" size={16} />
-                  Gửi lặp cùng Idempotency-Key (Test chống thanh toán 2 lần)
-                </PaymentButton>
                 <PaymentButton type="button" variant="secondary" onClick={reset}>
                   Quay lại trang Thanh toán
                 </PaymentButton>
@@ -917,11 +901,7 @@ export function PaymentCheckoutPhone({
               <>
                 <PaymentButton type="button" onClick={retryWithNewKey}>
                   <PaymentIcon name="refresh" size={17} />
-                  Thử lại thanh toán (Tự động sinh Idempotency-Key mới)
-                </PaymentButton>
-                <PaymentButton type="button" variant="secondary" onClick={pay}>
-                  <PaymentIcon name="layers" size={16} />
-                  Gửi lặp cùng khóa cũ (Kiểm tra cache lỗi FAILED)
+                  Thử lại thanh toán
                 </PaymentButton>
                 <PaymentButton type="button" variant="secondary" onClick={reset}>
                   Quay lại giỏ hàng
