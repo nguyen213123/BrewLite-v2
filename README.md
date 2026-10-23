@@ -24,7 +24,19 @@ npm --prefix backend run prisma:deploy
 npm run dev
 ```
 
-Chỉ sao chép env trong lần đầu; giữ cấu hình riêng nếu file đã tồn tại. Nếu PostgreSQL được cài riêng, bỏ lệnh Docker và sửa DATABASE_URL trong `backend/.env`.
+Chỉ sao chép env trong lần đầu; giữ cấu hình riêng nếu file đã tồn tại. Sau khi sao chép `backend/.env`, mở file và thiết lập `JWT_SECRET` với độ dài tối thiểu 32 ký tự (backend bắt buộc kiểm tra secret này khi khởi động và sẽ từ chối chạy nếu thiếu hoặc ngắn hơn 32 ký tự).
+
+Tạo chuỗi ngẫu nhiên tối thiểu 32 ký tự:
+- PowerShell:
+  ```powershell
+  -join ((65..90) + (97..122) + (48..57) | Get-Random -Count 32 | ForEach-Object { [char]$_ })
+  ```
+- Linux / macOS / Git Bash:
+  ```bash
+  openssl rand -hex 32
+  ```
+
+Nếu PostgreSQL được cài riêng, bỏ lệnh Docker và sửa DATABASE_URL trong `backend/.env`.
 
 - Frontend: http://localhost:3000
 - API liveness: http://localhost:3001/api/health
@@ -40,7 +52,7 @@ docker compose ps
 docker compose logs -f
 ```
 
-Backend tự áp dụng migration đã commit trước khi chạy. `docker compose down` dừng các dịch vụ, dữ liệu database được giữ trong volume. Project tên `brewlite-v2` để không tái sử dụng volume của BrewLite cũ. Nếu trước đây chạy project `brewlite`, dừng container db cũ đang chiếm cổng trước khi chạy v2; không xóa/reset volume cũ. Các thông tin đăng nhập mẫu chỉ dùng ở local. Khi chạy bằng Docker, cấu hình nằm trong compose.yaml; thay đổi NEXT_PUBLIC_API_URL cần build lại frontend vì giá trị được nhúng lúc build.
+Backend tự áp dụng migration đã commit trước khi chạy. Backend container tự động nạp `JWT_SECRET` qua `env_file` từ `backend/.env` (hoặc `.env` ở thư mục gốc); hãy đảm bảo `backend/.env` đã có `JWT_SECRET` (tối thiểu 32 ký tự) trước khi khởi động. `docker compose down` dừng các dịch vụ, dữ liệu database được giữ trong volume. Project tên `brewlite-v2` để không tái sử dụng volume của BrewLite cũ. Nếu trước đây chạy project `brewlite`, dừng container db cũ đang chiếm cổng trước khi chạy v2; không xóa/reset volume cũ. Các thông tin đăng nhập mẫu chỉ dùng ở local. Khi chạy bằng Docker, cấu hình nằm trong compose.yaml; thay đổi NEXT_PUBLIC_API_URL cần build lại frontend vì giá trị được nhúng lúc build.
 
 ## Lệnh chung
 
@@ -81,6 +93,7 @@ Mỗi tính năng có nhánh riêng, PR và ít nhất một người khác revi
 
 ## Xử lý lỗi thường gặp
 
+- Backend không khởi động / ném lỗi `JWT_SECRET must be configured with at least 32 characters`: Mở `backend/.env` và thiết lập `JWT_SECRET` với độ dài từ 32 ký tự trở lên.
 - Readiness trả 503: kiểm tra Docker Desktop, `docker compose ps db` và DATABASE_URL.
 - Cổng bị chiếm: dừng tiến trình cũ hoặc đổi port đồng bộ trong env, Compose và URL frontend.
 - Không tìm thấy Prisma client: chạy `npm run db:generate`.
