@@ -3,7 +3,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { apiGet, ApiRequestError } from '@/lib/api';
-import { subscribeAuth, getAuthSnapshot, getAuthServerSnapshot } from '@/lib/auth';
+import { subscribeAuth, getAuthSnapshot, getAuthServerSnapshot, updateUserPoints } from '@/lib/auth';
 import type { LoyaltyBalance, LoyaltyPage, LoyaltyEntry } from '@/lib/contracts/api.generated';
 
 export default function LoyaltyPage() {
@@ -32,6 +32,7 @@ export default function LoyaltyPage() {
 
         if (!ignore) {
           setBalance(balRes);
+          updateUserPoints(balRes.points);
           setEntries(entriesRes.data);
           setPage(entriesRes.meta.page);
           setTotalPages(entriesRes.meta.totalPages);

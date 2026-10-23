@@ -31,7 +31,7 @@ export class LoyaltyService implements LoyaltyPort, LoyaltyTransactionsPort {
       this.prisma.loyaltyEntry.count({ where: { userId } }),
       this.prisma.loyaltyEntry.findMany({
         where: { userId },
-        orderBy: { createdAt: 'desc' },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         skip,
         take: limit,
       }),
