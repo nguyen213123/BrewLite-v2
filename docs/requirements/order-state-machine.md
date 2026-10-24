@@ -60,3 +60,19 @@ $env:DATABASE_URL = "<giá trị trong backend/.env>"
 $env:RUN_DB_TESTS = "1"
 npm --prefix backend test -- order-transitions.integration
 ```
+
+## Kết quả chạy trên PostgreSQL thật
+
+Chạy ngày 24/10/2026 với database PostgreSQL của `docker compose` (service `db`), 2 migration đã áp dụng, lệnh `npm --prefix backend test -- order-transitions.integration` với `RUN_DB_TESTS=1`. Lần chạy dùng branch tạm ghép code của Issue #8 với `InventoryService` thật của PR #9 (#25), vì test này gọi `reserve`/`release` thật. Kết quả: 1 suite, 7/7 test đạt.
+
+| Kịch bản | Kết quả kiểm chứng |
+| --- | --- |
+| 10 request PENDING → PAID đồng thời, cùng `expectedVersion` | Đúng 1 request thành công, các request còn lại `ORDER_VERSION_CONFLICT`; đơn `PAID`/`CONSUMED`, version 1, đúng 1 OrderEvent |
+| PAID → PREPARING tranh PAID → CANCELLED | Đúng 1 bên thắng, version 2, đúng 1 OrderEvent; tồn kho tăng lại đúng số ly của đơn chỉ khi hủy thắng |
+| 5 lần hủy đồng thời một đơn PENDING | Đúng 1 lần thành công (`CANCELLED`/`RELEASED`, version 1), tồn kho cộng lại đúng một lần, đúng 1 OrderEvent |
+| Hủy lại đơn đã `CANCELLED` với version hiện tại | Trả đơn cũ, tồn kho và OrderEvent không đổi |
+| 5 lần PENDING → PAYMENT_FAILED đồng thời | Đúng 1 lần thành công, tồn kho cộng lại đúng một lần |
+| 3 lần thử lại đơn PAYMENT_FAILED đồng thời | Đúng 1 lần thành công (`PENDING`/`HELD`, version 2), tồn kho chỉ bị giữ một lần, đúng 1 OrderEvent |
+| Thử lại khi không đủ tồn kho | `OUT_OF_STOCK`; đơn vẫn `PAYMENT_FAILED`/`RELEASED`, tồn kho nguyên vẹn, không có OrderEvent (rollback) |
+
+Phạm vi: các test trên kiểm chứng dịch vụ chuyển trạng thái, hủy đơn và thử lại ở mức module `orders` với tồn kho thật. Chưa gồm luồng thanh toán của TV5 (gọi `transition`/`prepareRetry`), mock refund và đảo điểm với `LoyaltyModule` thật; cần chạy lại test tích hợp khi các phần đó được merge.
