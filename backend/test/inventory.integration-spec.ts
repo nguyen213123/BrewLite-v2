@@ -4,10 +4,12 @@ import { UnitOfWork } from '../src/common/database/unit-of-work';
 import { InventoryService } from '../src/modules/inventory/inventory.service';
 import { ApiError } from '../src/common/errors/api-error';
 import type { StoredOrder } from '../src/common/contracts/ports';
+import { createTempDatabase, type TempDatabase } from './support/temp-database';
 
 // Real PostgreSQL concurrency test for Issue #9. Opt-in like the schema test:
-//   $env:RUN_DB_TESTS = "1"; npm --prefix backend test -- inventory.integration
-// Needs DATABASE_URL (see backend/.env) and migrations applied. Fixtures use random ids and are not deleted.
+//   $env:DATABASE_URL = "<server in backend/.env>"; $env:RUN_DB_TESTS = "1"; npm --prefix backend test -- inventory.integration
+// It creates its own temporary database (migrations applied), writes every fixture there and drops it afterwards,
+// so nothing is written to the development database. See test/support/temp-database.ts.
 const integration = process.env.RUN_DB_TESTS === '1' ? describe : describe.skip;
 
 integration('Inventory on PostgreSQL: transaction + optimistic locking', () => {
@@ -15,12 +17,21 @@ integration('Inventory on PostgreSQL: transaction + optimistic locking', () => {
   let unitOfWork: UnitOfWork;
   const inventory = new InventoryService();
 
-  beforeAll(() => {
-    if (!process.env.DATABASE_URL) throw new Error('RUN_DB_TESTS requires DATABASE_URL');
+  let tempDatabase: TempDatabase | undefined;
+  const serverUrl = process.env.DATABASE_URL;
+
+  beforeAll(async () => {
+    tempDatabase = await createTempDatabase(serverUrl);
+    process.env.DATABASE_URL = tempDatabase.url; // PrismaService reads it when constructed
     prisma = new PrismaService();
     unitOfWork = new UnitOfWork(prisma);
-  });
-  afterAll(async () => { await prisma.$disconnect(); });
+  }, 120_000);
+  afterAll(async () => {
+    await prisma?.$disconnect();
+    if (serverUrl === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = serverUrl;
+    await tempDatabase?.drop();
+  }, 60_000);
 
   const newProduct = (stock: number, id: string = randomUUID()) =>
     prisma.product.create({
