@@ -76,6 +76,8 @@ npm --prefix backend test
 Remove-Item Env:RUN_DB_TESTS
 ```
 
+Các suite tích hợp có **ghi dữ liệu mẫu thật** (tồn kho, đơn hàng) không chạy trên database đang dùng mà tự tạo database tạm `brewlite_test_<ngẫu nhiên>` qua `backend/test/support/temp-database.ts` (áp dụng migration, xóa trong `afterAll` kể cả khi test lỗi). Khi đó `DATABASE_URL` chỉ là máy chủ PostgreSQL cục bộ để chạy `CREATE/DROP DATABASE`, role cần quyền `CREATEDB`. Xem `docs/requirements/inventory-concurrency.md` để biết lệnh chạy và cách dọn database tạm còn sót.
+
 Database tests kiểm tra bảng, CHECK và unique nền; chưa chứng minh chống vượt tồn hoặc idempotency nghiệp vụ. TV3/TV5 bổ sung test tranh chấp thật khi hoàn thiện service. Không đóng các issue chức năng chỉ vì bộ khung build/test đạt.
 
 ## Quy trình thay đổi và nghiệm thu
