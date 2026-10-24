@@ -5,11 +5,12 @@ import { InventoryService } from '../src/modules/inventory/inventory.service';
 import { OrderTransactionsService } from '../src/modules/orders/order-transactions.service';
 import { OrdersService } from '../src/modules/orders/orders.service';
 import { ApiError } from '../src/common/errors/api-error';
+import { createTempDatabase, type TempDatabase } from './support/temp-database';
 
 // Real PostgreSQL test for Issue #8 (competing transitions, duplicate cancel/retry, rollback). Opt-in like the others:
 //   $env:DATABASE_URL = "<value from backend/.env>"; $env:RUN_DB_TESTS = "1"
 //   npm --prefix backend test -- order-transitions.integration
-// Fixtures use random ids and are not deleted.
+// Every fixture is written to a migrated temporary database, dropped after the suite even if a test fails.
 const integration = process.env.RUN_DB_TESTS === '1' ? describe : describe.skip;
 
 type Status = 'PENDING' | 'PAID' | 'PAYMENT_FAILED';
@@ -23,15 +24,26 @@ integration('Order state machine on PostgreSQL', () => {
   let orders: OrdersService;
   const promotions = { price: jest.fn(), reserve: jest.fn(), release: jest.fn() }; // fixtures have no promotion
   const loyalty = { earn: jest.fn(), reverse: jest.fn(async () => undefined) };
+  let tempDatabase: TempDatabase | undefined;
+  const serverUrl = process.env.DATABASE_URL;
 
-  beforeAll(() => {
-    if (!process.env.DATABASE_URL) throw new Error('RUN_DB_TESTS requires DATABASE_URL');
+  beforeAll(async () => {
+    tempDatabase = await createTempDatabase(serverUrl);
+    process.env.DATABASE_URL = tempDatabase.url;
     prisma = new PrismaService();
     unitOfWork = new UnitOfWork(prisma);
     transitions = new OrderTransactionsService(new InventoryService(), promotions as never);
     orders = new OrdersService(unitOfWork, {} as never, {} as never, {} as never, transitions, loyalty as never);
-  });
-  afterAll(async () => { await prisma.$disconnect(); });
+  }, 120_000);
+  afterAll(async () => {
+    try {
+      await prisma?.$disconnect();
+    } finally {
+      if (serverUrl === undefined) delete process.env.DATABASE_URL;
+      else process.env.DATABASE_URL = serverUrl;
+      await tempDatabase?.drop();
+    }
+  }, 60_000);
 
   // `stock` is what is left AFTER this order's QTY cups were taken (a HELD/CONSUMED order already holds them).
   async function newOrder(options: { status: Status; reservation: Reservation; stock: number; version?: number }) {

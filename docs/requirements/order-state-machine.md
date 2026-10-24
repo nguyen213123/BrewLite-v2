@@ -55,15 +55,20 @@ Mọi lỗi ném ra làm transaction của người gọi rollback, nên trạng
 
 ```powershell
 docker compose up -d db
-npm --prefix backend run prisma:deploy
 $env:DATABASE_URL = "<giá trị trong backend/.env>"
 $env:RUN_DB_TESTS = "1"
 npm --prefix backend test -- order-transitions.integration
+Remove-Item Env:RUN_DB_TESTS
+Remove-Item Env:DATABASE_URL
 ```
+
+Suite dùng chung `test/support/temp-database.ts` từ PR #25: tạo database `brewlite_test_<ngẫu nhiên>`, áp dụng migration rồi mới tạo fixture. `afterAll` ngắt kết nối, khôi phục `DATABASE_URL` và xóa database tạm kể cả khi assertion thất bại. `DATABASE_URL` chỉ chọn server để tạo/xóa database; không ghi fixture vào database phát triển. Cần PostgreSQL cục bộ và role có quyền `CREATEDB`, như cấu hình Docker Compose/CI. Nếu tiến trình bị tắt đột ngột, xem hướng dẫn dọn database tạm trong [inventory-concurrency.md](inventory-concurrency.md).
+
+Nhánh PR #29 đã cập nhật từ `main` có PR #25, nên test sử dụng `InventoryService` thật và cơ chế retry `UnitOfWork` ngay trên nhánh này, không còn cần ghép code tồn kho riêng để chạy.
 
 ## Kết quả chạy trên PostgreSQL thật
 
-Chạy ngày 24/10/2026 với database PostgreSQL của `docker compose` (service `db`), 2 migration đã áp dụng, lệnh `npm --prefix backend test -- order-transitions.integration` với `RUN_DB_TESTS=1`. Lần chạy dùng branch tạm ghép code của Issue #8 với `InventoryService` thật của PR #9 (#25), vì test này gọi `reserve`/`release` thật. Kết quả: 1 suite, 7/7 test đạt.
+Kết quả do tác giả ghi nhận trước bản sửa cách ly database: chạy ngày 24/10/2026 với PostgreSQL của `docker compose` (service `db`), 2 migration đã áp dụng, lệnh `npm --prefix backend test -- order-transitions.integration` với `RUN_DB_TESTS=1`. Lần chạy dùng branch tạm ghép code của Issue #8 với `InventoryService` thật của PR #9 (#25), vì test này gọi `reserve`/`release` thật. Kết quả: 1 suite, 7/7 test đạt. Kết quả CI của bản sửa hiện tại được cập nhật trong mô tả PR.
 
 | Kịch bản | Kết quả kiểm chứng |
 | --- | --- |
