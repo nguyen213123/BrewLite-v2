@@ -1022,16 +1022,6 @@ export function PaymentCheckoutPhone({
   );
   // Order of the failed attempt kept as money/items snapshot while a new attempt (new key) is prepared.
   const [retryOrder, setRetryOrder] = useState<Api.Order | null>(null);
-  const trackedOrderId = useRef<string | undefined>(order?.id);
-
-  useEffect(() => {
-    // A different order must never reuse the previous order's Idempotency-Key.
-    if (!isDemoMode && order?.id !== trackedOrderId.current) {
-      trackedOrderId.current = order?.id;
-      setKeyValue(idempotencyKeyProp ?? createPaymentIdempotencyKey());
-      setRetryOrder(null);
-    }
-  }, [order?.id, isDemoMode, idempotencyKeyProp]);
   const [busy, setBusy] = useState(false);
   const [replayed, setReplayed] = useState(false);
   const [details, setDetails] = useState(false);
@@ -1050,6 +1040,54 @@ export function PaymentCheckoutPhone({
       ? paymentResult.loyaltyPointsEarned
       : null,
   );
+
+  // Adjust state during render when props change (standard React pattern without effect cascade)
+  const [prevOrderId, setPrevOrderId] = useState(order?.id);
+  if (!isDemoMode && order?.id !== prevOrderId) {
+    setPrevOrderId(order?.id);
+    setKeyValue(idempotencyKeyProp ?? createPaymentIdempotencyKey());
+    setRetryOrder(null);
+    setConfirmedOrder(null);
+    setConfirmedPayment(null);
+    setState(initialState ?? 0);
+    setReplayed(false);
+    setVerificationPending(false);
+    setVerificationErrorText(null);
+    setEarnedLoyaltyPoints(null);
+    setBusy(false);
+    setDetails(false);
+    setSelectedPromoCode(
+      order?.promotionCode !== undefined
+        ? order.promotionCode
+        : isDemoMode
+          ? DEMO_PROMO_CODE
+          : null,
+    );
+  }
+
+  const [prevIdempotencyProp, setPrevIdempotencyProp] = useState(idempotencyKeyProp);
+  if (
+    !isDemoMode &&
+    idempotencyKeyProp !== undefined &&
+    idempotencyKeyProp !== prevIdempotencyProp
+  ) {
+    setPrevIdempotencyProp(idempotencyKeyProp);
+    setKeyValue(idempotencyKeyProp);
+    setConfirmedPayment(null);
+    setConfirmedOrder(null);
+    setRetryOrder(null);
+    setReplayed(false);
+    setVerificationPending(false);
+    setVerificationErrorText(null);
+    if (state !== 0) {
+      setState(0);
+    }
+  }
+
+  const trackedOrderId = useRef<string | undefined>(order?.id);
+  useEffect(() => {
+    trackedOrderId.current = order?.id;
+  }, [order?.id]);
 
   const resultRef = useRef<HTMLDivElement | null>(null);
 
@@ -1083,16 +1121,29 @@ export function PaymentCheckoutPhone({
     onNotify?.(msg);
   };
 
-  // Resolve order & payment fields: API result takes top priority, then order prop, then demo fallback only in demo mode.
-  const snapshotOrder = confirmedOrder ?? retryOrder;
+  // Resolve order & payment fields: scoped strictly to the currently displayed order
+  const snapshotOrder =
+    confirmedOrder && (!order?.id || confirmedOrder.id === order.id)
+      ? confirmedOrder
+      : retryOrder && (!order?.id || retryOrder.id === order.id)
+        ? retryOrder
+        : null;
+
   const effectiveOrderId =
-    snapshotOrder?.id ?? order?.id ?? (isDemoMode ? '44444444-4444-4444-8444-444444444444' : '');
+    order?.id ?? snapshotOrder?.id ?? (isDemoMode ? '44444444-4444-4444-8444-444444444444' : '');
   const effectiveOrderCode =
-    snapshotOrder?.code ??
     order?.code ??
+    snapshotOrder?.code ??
     (isDemoMode ? DEFAULT_ORDER_CODE : effectiveOrderId);
-  const effectiveMethod: Api.PaymentMethod = confirmedPayment?.method ?? method;
-  const effectiveIdempotencyKey = confirmedPayment?.idempotencyKey ?? keyValue;
+
+  const effectiveMethod: Api.PaymentMethod =
+    confirmedPayment && (!order?.id || confirmedPayment.orderId === order.id)
+      ? confirmedPayment.method
+      : method;
+  const effectiveIdempotencyKey =
+    confirmedPayment && (!order?.id || confirmedPayment.orderId === order.id)
+      ? confirmedPayment.idempotencyKey
+      : keyValue;
 
   const activePromo = AVAILABLE_PROMOTIONS.find(p => p.code === selectedPromoCode) ?? null;
   const effectivePromoCode =
@@ -1115,11 +1166,12 @@ export function PaymentCheckoutPhone({
           : 0;
 
   const effectiveTotal =
-    confirmedPayment?.amount ??
-    snapshotOrder?.total ??
-    (order?.total !== undefined && selectedPromoCode === (order.promotionCode ?? null)
-      ? order.total
-      : Math.max(0, (rawSubtotal ?? 0) - effectiveDiscount));
+    confirmedPayment && (!order?.id || confirmedPayment.orderId === order.id)
+      ? confirmedPayment.amount
+      : snapshotOrder?.total ??
+        (order?.total !== undefined && selectedPromoCode === (order.promotionCode ?? null)
+          ? order.total
+          : Math.max(0, (rawSubtotal ?? 0) - effectiveDiscount));
 
   const effectiveSubtotal =
     rawSubtotal !== undefined ? rawSubtotal : effectiveTotal + effectiveDiscount;
@@ -1130,13 +1182,16 @@ export function PaymentCheckoutPhone({
 
   const displayOrderStatus: Api.OrderStatus = verificationPending
     ? (order?.status ?? 'PENDING')
-    : retryOrder && !confirmedOrder
+    : retryOrder && (!order?.id || retryOrder.id === order.id) && !confirmedOrder
       ? 'PENDING'
-      : confirmedOrder?.status ??
-      (state === 1 ? 'PAID' : state === 2 ? 'PAYMENT_FAILED' : (order?.status ?? 'PENDING'));
+      : confirmedOrder && (!order?.id || confirmedOrder.id === order.id)
+        ? confirmedOrder.status
+        : (state === 1 ? 'PAID' : state === 2 ? 'PAYMENT_FAILED' : (order?.status ?? 'PENDING'));
 
   const displayReservationStatus =
-    confirmedOrder?.reservationStatus ?? order?.reservationStatus;
+    (confirmedOrder && (!order?.id || confirmedOrder.id === order.id)
+      ? confirmedOrder.reservationStatus
+      : undefined) ?? order?.reservationStatus;
 
   const displayItems =
     snapshotOrder?.items && snapshotOrder.items.length > 0
@@ -1151,13 +1206,20 @@ export function PaymentCheckoutPhone({
 
     if (onExecutePayment) {
       setBusy(true);
+      const requestOrderId = effectiveOrderId;
+      const requestKey = keyValue;
       try {
         const executionOutcome = await onExecutePayment({
-          orderId: effectiveOrderId,
+          orderId: requestOrderId,
           method,
-          idempotencyKey: keyValue,
+          idempotencyKey: requestKey,
           mockOutcome: outcome,
         });
+
+        // Guard against late response from an order that was switched away while request was in-flight
+        if (!isDemoMode && order?.id && order.id !== requestOrderId) {
+          return;
+        }
 
         setBusy(false);
         setReplayed(Boolean(executionOutcome.replayed));
@@ -1204,7 +1266,7 @@ export function PaymentCheckoutPhone({
             orderStatus: latest?.status ?? 'PAID',
             method: paymentSnapshot?.method ?? method,
             mockOutcome: outcome,
-            idempotencyKey: paymentSnapshot?.idempotencyKey ?? keyValue,
+            idempotencyKey: paymentSnapshot?.idempotencyKey ?? requestKey,
             replayed: executionOutcome.replayed,
             order: latest,
             payment: paymentSnapshot,
@@ -1218,7 +1280,7 @@ export function PaymentCheckoutPhone({
             orderStatus: latest?.status ?? 'PAYMENT_FAILED',
             method: paymentSnapshot?.method ?? method,
             mockOutcome: outcome,
-            idempotencyKey: paymentSnapshot?.idempotencyKey ?? keyValue,
+            idempotencyKey: paymentSnapshot?.idempotencyKey ?? requestKey,
             replayed: executionOutcome.replayed,
             order: latest,
             payment: paymentSnapshot,
@@ -1226,6 +1288,9 @@ export function PaymentCheckoutPhone({
           });
         }
       } catch (err: unknown) {
+        if (!isDemoMode && order?.id && order.id !== requestOrderId) {
+          return;
+        }
         setBusy(false);
         const msg = err instanceof Error ? err.message : 'Không thể kết nối đến máy chủ thanh toán.';
         notify(msg);
@@ -1289,8 +1354,12 @@ export function PaymentCheckoutPhone({
       return;
     }
     setBusy(true);
+    const requestOrderId = effectiveOrderId;
     try {
-      const fresh = await onVerifyOrder(effectiveOrderId);
+      const fresh = await onVerifyOrder(requestOrderId);
+      if (!isDemoMode && order?.id && order.id !== requestOrderId) {
+        return;
+      }
       setConfirmedOrder(fresh);
       setVerificationPending(false);
       setVerificationErrorText(null);
@@ -1329,6 +1398,9 @@ export function PaymentCheckoutPhone({
         notify(`Xác minh hoàn tất: Đơn hàng ở trạng thái ${fresh.status}.`);
       }
     } catch (err: unknown) {
+      if (!isDemoMode && order?.id && order.id !== requestOrderId) {
+        return;
+      }
       setBusy(false);
       const msg =
         err instanceof Error ? err.message : 'Chưa thể xác minh trạng thái đơn hàng. Vui lòng thử lại.';
@@ -1348,18 +1420,20 @@ export function PaymentCheckoutPhone({
     setRetryOrder(null);
     setEarnedLoyaltyPoints(null);
     if (!isDemoMode) {
-      setKeyValue(idempotencyKeyProp ?? createPaymentIdempotencyKey());
+      const freshKey = idempotencyKeyProp ?? createPaymentIdempotencyKey();
+      setKeyValue(freshKey);
     }
     safeScrollToTop();
   };
 
   const retryWithNewKey = () => {
     // Keep the failed order as price/items snapshot; backend re-reserves stock and moves the order state.
-    if (confirmedOrder) {
+    if (confirmedOrder && (!order?.id || confirmedOrder.id === order.id)) {
       setRetryOrder(confirmedOrder);
     }
     setConfirmedOrder(null);
-    setKeyValue(createPaymentIdempotencyKey());
+    const newKey = createPaymentIdempotencyKey();
+    setKeyValue(newKey);
     setReplayed(false);
     setVerificationPending(false);
     setVerificationErrorText(null);

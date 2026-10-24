@@ -1515,4 +1515,204 @@ describe('PaymentFlowWidget Component Render & Interaction Tests (#10)', () => {
     expect(rerenderCalls.mock.calls[1][0].orderId).toBe(orderB.id);
     expect(rerenderCalls.mock.calls[1][0].idempotencyKey).not.toBe(rerenderCalls.mock.calls[0][0].idempotencyKey);
   });
+
+  it('P1: switching from failed order A to order B ensures payment sends orderId of B with a fresh key, and late responses from order A do not corrupt order B', async () => {
+    const orderA = { id: 'aaaaaaaa-1111-4111-8111-111111111111', code: 'BL-A', subtotal: 90000, discount: 0, total: 90000 };
+    const orderB = { id: 'bbbbbbbb-2222-4222-8222-222222222222', code: 'BL-B', subtotal: 60000, discount: 0, total: 60000 };
+
+    const failedPaymentA = {
+      id: 'pay-a',
+      orderId: orderA.id,
+      idempotencyKey: 'key-a',
+      amount: 90000,
+      method: 'WALLET' as const,
+      status: 'FAILED' as const,
+      createdAt: fixedDate.toISOString(),
+      updatedAt: fixedDate.toISOString(),
+    };
+    const failedOrderA = {
+      ...orderA,
+      status: 'PAYMENT_FAILED' as const,
+      reservationStatus: 'RELEASED' as const,
+      version: 1,
+      currency: 'VND' as const,
+      promotionCode: null,
+      createdAt: fixedDate.toISOString(),
+      updatedAt: fixedDate.toISOString(),
+      items: [],
+    };
+
+    const paidPaymentB = {
+      id: 'pay-b',
+      orderId: orderB.id,
+      idempotencyKey: 'key-b',
+      amount: 60000,
+      method: 'WALLET' as const,
+      status: 'SUCCEEDED' as const,
+      createdAt: fixedDate.toISOString(),
+      updatedAt: fixedDate.toISOString(),
+    };
+    const paidOrderB = {
+      ...orderB,
+      status: 'PAID' as const,
+      reservationStatus: 'CONSUMED' as const,
+      version: 1,
+      currency: 'VND' as const,
+      promotionCode: null,
+      createdAt: fixedDate.toISOString(),
+      updatedAt: fixedDate.toISOString(),
+      items: [],
+    };
+
+    const onExecutePayment = jest.fn()
+      .mockResolvedValueOnce({
+        result: { payment: failedPaymentA, order: failedOrderA, loyaltyPointsEarned: 0 },
+        replayed: false,
+        latestOrder: failedOrderA,
+        verified: true,
+      })
+      .mockResolvedValueOnce({
+        result: { payment: paidPaymentB, order: paidOrderB, loyaltyPointsEarned: 6 },
+        replayed: false,
+        latestOrder: paidOrderB,
+        verified: true,
+      });
+
+    const onPaymentCommitted = jest.fn();
+
+    const view = mount(PaymentCheckoutPhone, {
+      isDemo: false,
+      order: orderA,
+      onExecutePayment,
+      onPaymentCommitted,
+    });
+
+    // Step 1: Pay order A -> returns PAYMENT_FAILED
+    await view.clickButton('Xác nhận thanh toán • 90.000 ₫');
+    expect(view.getText()).toContain('Thử lại thanh toán với mã mới');
+    const keyUsedForA = onExecutePayment.mock.calls[0][0].idempotencyKey;
+
+    // Step 2: Parent switches widget to order B
+    view.rerender({
+      isDemo: false,
+      order: orderB,
+      onExecutePayment,
+      onPaymentCommitted,
+    });
+
+    // Widget should now display clean checkout for order B
+    expect(view.getText()).toContain('BL-B');
+    expect(view.getText()).toContain('Xác nhận thanh toán • 60.000 ₫');
+    expect(view.getButtons().some(b => b.text.includes('Xác nhận thanh toán • 60.000 ₫'))).toBe(true);
+
+    // Step 3: Pay order B
+    await view.clickButton('Xác nhận thanh toán • 60.000 ₫');
+
+    expect(onExecutePayment).toHaveBeenCalledTimes(2);
+    const secondCall = onExecutePayment.mock.calls[1][0];
+    // Must be order B, NOT order A
+    expect(secondCall.orderId).toBe(orderB.id);
+    expect(secondCall.orderId).not.toBe(orderA.id);
+    // Key must be distinct from order A's key
+    expect(secondCall.idempotencyKey).not.toBe(keyUsedForA);
+    expect(secondCall.idempotencyKey).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+
+    // Step 4: Verify late response protection
+    let resolveLateCall!: (val: unknown) => void;
+    const latePromise = new Promise(res => { resolveLateCall = res; });
+    const slowPayment = jest.fn().mockImplementation(() => latePromise);
+
+    const viewRace = mount(PaymentCheckoutPhone, {
+      isDemo: false,
+      order: orderA,
+      onExecutePayment: slowPayment,
+      onPaymentCommitted,
+    });
+
+    // Trigger payment for order A (in flight)
+    const clickPromise = viewRace.clickButton('Xác nhận thanh toán • 90.000 ₫');
+    // Parent switches to order B while order A is still pending
+    viewRace.rerender({
+      isDemo: false,
+      order: orderB,
+      onExecutePayment: slowPayment,
+      onPaymentCommitted,
+    });
+
+    // Resolve late call for order A with success
+    resolveLateCall({
+      result: { payment: { ...failedPaymentA, status: 'SUCCEEDED' }, order: { ...failedOrderA, status: 'PAID' } },
+      replayed: false,
+      latestOrder: { ...failedOrderA, status: 'PAID' },
+      verified: true,
+    });
+    await clickPromise;
+
+    // Late response must be ignored: widget should still be on order B, not showing order A's success
+    expect(viewRace.getText()).toContain('BL-B');
+    expect(viewRace.getText()).not.toContain('Thanh toán thành công qua API!');
+  });
+
+  it('P2: widget adopts new idempotencyKey from parent for new attempt, while technical retry preserves same key and payload', async () => {
+    const order = { id: orderId, code: 'BL-P2', subtotal: 90000, discount: 0, total: 90000 };
+    const key1 = '11111111-1111-4111-8111-111111111111';
+    const key2 = '22222222-2222-4222-8222-222222222222';
+
+    let attempt = 0;
+    const executePayment = jest.fn().mockImplementation(async () => {
+      attempt += 1;
+      if (attempt === 1) {
+        // Attempt 1 with key1 fails with technical network error
+        throw new Error('Network error (ECONNRESET)');
+      }
+      if (attempt === 2) {
+        // Technical retry with key1 succeeds
+        return {
+          result: { payment: { id: paymentId, orderId, idempotencyKey: key1, amount: 90000, method: 'WALLET', status: 'SUCCEEDED' }, order: { ...order, status: 'PAID', reservationStatus: 'CONSUMED' } },
+          replayed: false,
+          latestOrder: { ...order, status: 'PAID', reservationStatus: 'CONSUMED' },
+          verified: true,
+        };
+      }
+      // Attempt 3 with new parent key2 succeeds
+      return {
+        result: { payment: { id: paymentId, orderId, idempotencyKey: key2, amount: 90000, method: 'WALLET', status: 'SUCCEEDED' }, order: { ...order, status: 'PAID', reservationStatus: 'CONSUMED' } },
+        replayed: false,
+        latestOrder: { ...order, status: 'PAID', reservationStatus: 'CONSUMED' },
+        verified: true,
+      };
+    });
+
+    const view = mount(PaymentCheckoutPhone, {
+      isDemo: false,
+      order,
+      idempotencyKey: key1,
+      onExecutePayment: executePayment,
+    });
+
+    // Attempt 1: calls with key1 -> network error
+    await view.clickButton('Xác nhận thanh toán • 90.000 ₫');
+    expect(executePayment).toHaveBeenCalledTimes(1);
+    expect(executePayment.mock.calls[0][0].idempotencyKey).toBe(key1);
+
+    // Technical retry: parent does NOT change key prop -> widget keeps key1 and same payload
+    await view.clickButton('Xác nhận thanh toán • 90.000 ₫');
+    expect(executePayment).toHaveBeenCalledTimes(2);
+    expect(executePayment.mock.calls[1][0].idempotencyKey).toBe(key1);
+    expect(executePayment.mock.calls[1][0]).toEqual(executePayment.mock.calls[0][0]);
+
+    // New attempt: parent explicitly passes new key2 for the same order
+    view.rerender({
+      isDemo: false,
+      order,
+      idempotencyKey: key2,
+      onExecutePayment: executePayment,
+    });
+
+    // Widget adopts parent's new key2
+    await view.clickButton('Xác nhận thanh toán • 90.000 ₫');
+    expect(executePayment).toHaveBeenCalledTimes(3);
+    expect(executePayment.mock.calls[2][0].idempotencyKey).toBe(key2);
+    expect(executePayment.mock.calls[2][0].idempotencyKey).not.toBe(key1);
+  });
 });
