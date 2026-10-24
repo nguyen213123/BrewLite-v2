@@ -17,12 +17,22 @@ export default function Header() {
   return (
     <header className="border-b border-[#cdd5c8] bg-white/70 backdrop-blur-sm sticky top-0 z-50">
       <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
-        <Link href="/" className="flex items-center gap-2">
-          <span className="text-xl font-bold tracking-tight text-[#263c30]">BrewLite</span>
-          <span className="rounded bg-[#263c30]/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-[#263c30]">
-            v2
-          </span>
-        </Link>
+        <div className="flex items-center gap-6">
+          <Link href="/" className="flex items-center gap-2">
+            <span className="text-xl font-bold tracking-tight text-[#263c30]">BrewLite</span>
+            <span className="rounded bg-[#263c30]/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-[#263c30]">
+              v2
+            </span>
+          </Link>
+          {user && (
+            <Link
+              href="/orders"
+              className="text-sm font-medium text-[#263c30]/80 transition hover:text-[#263c30]"
+            >
+              Lịch sử đơn
+            </Link>
+          )}
+        </div>
 
         <nav className="flex items-center gap-4">
           {user ? (
