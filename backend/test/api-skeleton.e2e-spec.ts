@@ -166,10 +166,6 @@ describe('Default skeleton fails closed without mocked ports', () => {
     await app.init();
   });
   afterAll(async () => { await app.close(); });
-  it('returns explicit 501 for a valid public catalog request', async () => {
-    const response = await request(app.getHttpServer()).get('/api/products').expect(501);
-    expect(response.body.code).toBe('FEATURE_NOT_IMPLEMENTED');
-  });
   it('does not decode-and-trust a token or call order handlers', async () => {
     const response = await request(app.getHttpServer()).post('/api/orders').set('Authorization', 'Bearer not-a-verified-token')
       .set('Idempotency-Key', key).send(validOrder).expect(501);
@@ -177,5 +173,49 @@ describe('Default skeleton fails closed without mocked ports', () => {
   });
   it('still refuses a protected request without a token', async () => {
     await request(app.getHttpServer()).get('/api/orders/me').expect(401);
+  });
+});
+
+describe('Public catalog API (database mocked)', () => {
+  let app: INestApplication;
+  const product = {
+    id: productId,
+    name: 'Cappuccino',
+    description: 'Cà phê espresso và sữa',
+    price: 45000,
+    imageUrl: 'http://localhost:3000/images/cappuccino.jpg',
+    stock: 20,
+  };
+  const prismaMock = {
+    product: {
+      count: jest.fn().mockResolvedValue(1),
+      findMany: jest.fn().mockResolvedValue([product]),
+    },
+  };
+
+  beforeAll(async () => {
+    const module = await Test.createTestingModule({ imports: [AppModule] })
+      .overrideProvider(PrismaService).useValue(prismaMock)
+      .compile();
+    app = module.createNestApplication();
+    configureApp(app);
+    await app.init();
+  });
+
+  afterAll(async () => { await app?.close(); });
+
+  it('returns 200 with product data and pagination metadata', async () => {
+    const response = await request(app.getHttpServer())
+      .get('/api/products?page=1&limit=12')
+      .expect(200);
+
+    expect(response.body).toEqual({
+      data: [product],
+      meta: { page: 1, limit: 12, total: 1, totalPages: 1 },
+    });
+    expect(prismaMock.product.count).toHaveBeenCalledWith({ where: { active: true } });
+    expect(prismaMock.product.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { active: true }, skip: 0, take: 12 }),
+    );
   });
 });
