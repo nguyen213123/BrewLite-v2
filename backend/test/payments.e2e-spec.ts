@@ -1715,4 +1715,388 @@ describe('PaymentFlowWidget Component Render & Interaction Tests (#10)', () => {
     expect(executePayment.mock.calls[2][0].idempotencyKey).toBe(key2);
     expect(executePayment.mock.calls[2][0].idempotencyKey).not.toBe(key1);
   });
+
+  function createDeferred<T>() {
+    let resolve!: (value: T | PromiseLike<T>) => void;
+    let reject!: (reason?: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  it('P1 - Race condition (Payment in-flight): Thanh toan A dang cho -> chuyen sang B -> A tra ket qua khong ghi de B, khong goi callback A, va khong anh huong busy cua B', async () => {
+    const orderA = { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', code: 'BL-A', subtotal: 90000, discount: 0, total: 90000 };
+    const orderB = { id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', code: 'BL-B', subtotal: 60000, discount: 0, total: 60000 };
+
+    const deferredA = createDeferred<Record<string, unknown>>();
+    const deferredB = createDeferred<Record<string, unknown>>();
+    const onPaymentCommitted = jest.fn();
+
+    const onExecutePayment = jest.fn().mockImplementation((payload: { orderId: string }) => {
+      if (payload.orderId === orderA.id) {
+        return deferredA.promise;
+      }
+      return deferredB.promise;
+    });
+
+    const view = mount(PaymentCheckoutPhone, {
+      isDemo: false,
+      order: orderA,
+      onExecutePayment,
+      onPaymentCommitted,
+    });
+
+    // 1. Start payment for order A (in-flight)
+    const clickA = view.clickButton('Xác nhận thanh toán • 90.000 ₫');
+    expect(onExecutePayment).toHaveBeenCalledTimes(1);
+    expect(onExecutePayment.mock.calls[0][0].orderId).toBe(orderA.id);
+
+    // 2. Parent switches widget to order B while A is pending
+    view.rerender({
+      isDemo: false,
+      order: orderB,
+      onExecutePayment,
+      onPaymentCommitted,
+    });
+
+    // Widget should immediately switch to clean view of order B
+    expect(view.getText()).toContain('BL-B');
+    expect(view.getText()).toContain('Xác nhận thanh toán • 60.000 ₫');
+
+    // 3. Start payment for order B (order B is now in-flight)
+    const clickB = view.clickButton('Xác nhận thanh toán • 60.000 ₫');
+    expect(onExecutePayment).toHaveBeenCalledTimes(2);
+    expect(onExecutePayment.mock.calls[1][0].orderId).toBe(orderB.id);
+
+    // 4. Late response of A resolves with SUCCESS
+    deferredA.resolve({
+      result: {
+        payment: { id: 'pay-a', orderId: orderA.id, idempotencyKey: 'key-a', amount: 90000, method: 'WALLET', status: 'SUCCEEDED' },
+        order: { ...orderA, status: 'PAID' },
+      },
+      replayed: false,
+      latestOrder: { ...orderA, status: 'PAID' },
+      verified: true,
+    });
+    await clickA;
+
+    // Must NOT commit payment for A, and must NOT clear B's in-flight/busy state
+    expect(onPaymentCommitted).not.toHaveBeenCalled();
+    expect(view.getText()).toContain('BL-B');
+    expect(view.getText()).not.toContain('Thanh toán thành công');
+
+    // 5. Order B resolves with SUCCESS
+    deferredB.resolve({
+      result: {
+        payment: { id: 'pay-b', orderId: orderB.id, idempotencyKey: 'key-b', amount: 60000, method: 'WALLET', status: 'SUCCEEDED' },
+        order: { ...orderB, status: 'PAID' },
+      },
+      replayed: false,
+      latestOrder: { ...orderB, status: 'PAID' },
+      verified: true,
+    });
+    await clickB;
+
+    // Order B commits successfully!
+    expect(onPaymentCommitted).toHaveBeenCalledTimes(1);
+    expect(onPaymentCommitted.mock.calls[0][0].order.id).toBe(orderB.id);
+    expect(onPaymentCommitted.mock.calls[0][0].status).toBe('PAID');
+    expect(view.getText()).toContain('Thanh toán thành công');
+  });
+
+  it('P1 - Race condition (Payment error in-flight): Thanh toan A dang cho -> chuyen sang B -> A bi loi mang (reject) khong hien thi loi len widget B, khong anh huong busy cua B', async () => {
+    const orderA = { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', code: 'BL-ERR-A', subtotal: 90000, discount: 0, total: 90000 };
+    const orderB = { id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', code: 'BL-ERR-B', subtotal: 60000, discount: 0, total: 60000 };
+
+    const deferredA = createDeferred<Record<string, unknown>>();
+    const deferredB = createDeferred<Record<string, unknown>>();
+    const onPaymentCommitted = jest.fn();
+
+    const onExecutePayment = jest.fn().mockImplementation((payload: { orderId: string }) => {
+      if (payload.orderId === orderA.id) {
+        return deferredA.promise;
+      }
+      return deferredB.promise;
+    });
+
+    const view = mount(PaymentCheckoutPhone, {
+      isDemo: false,
+      order: orderA,
+      onExecutePayment,
+      onPaymentCommitted,
+    });
+
+    // 1. Start payment for order A
+    const clickA = view.clickButton('Xác nhận thanh toán • 90.000 ₫');
+
+    // 2. Parent switches to order B
+    view.rerender({
+      isDemo: false,
+      order: orderB,
+      onExecutePayment,
+      onPaymentCommitted,
+    });
+
+    // 3. Start payment for order B
+    const clickB = view.clickButton('Xác nhận thanh toán • 60.000 ₫');
+
+    // 4. Order A rejects with network error
+    deferredA.reject(new Error('Connection reset by peer'));
+    await clickA;
+
+    // Must NOT show error on order B's widget
+    expect(view.getText()).not.toContain('Connection reset by peer');
+    expect(view.getText()).toContain('BL-ERR-B');
+
+    // 5. Order B resolves successfully
+    deferredB.resolve({
+      result: {
+        payment: { id: 'pay-b', orderId: orderB.id, idempotencyKey: 'key-b', amount: 60000, method: 'WALLET', status: 'SUCCEEDED' },
+        order: { ...orderB, status: 'PAID' },
+      },
+      replayed: false,
+      latestOrder: { ...orderB, status: 'PAID' },
+      verified: true,
+    });
+    await clickB;
+
+    expect(onPaymentCommitted).toHaveBeenCalledTimes(1);
+    expect(onPaymentCommitted.mock.calls[0][0].order.id).toBe(orderB.id);
+    expect(view.getText()).toContain('Thanh toán thành công');
+  });
+
+  it('P1 - Race condition (Verification in-flight): Xac minh A dang cho -> chuyen sang B -> A tra ket qua khong ghi de B, khong goi callback A', async () => {
+    const orderA = { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', code: 'BL-VERIFY-A', subtotal: 90000, discount: 0, total: 90000 };
+    const orderB = { id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', code: 'BL-VERIFY-B', subtotal: 60000, discount: 0, total: 60000 };
+
+    const deferredVerifyA = createDeferred<Record<string, unknown>>();
+    const onPaymentCommitted = jest.fn();
+
+    // Initial payment for A requires manual verification (replayed=true, verified=false)
+    const onExecutePayment = jest.fn().mockResolvedValue({
+      result: {
+        payment: { id: 'pay-a', orderId: orderA.id, idempotencyKey: 'key-a', amount: 90000, method: 'WALLET', status: 'SUCCEEDED' },
+        order: { ...orderA, status: 'PAID' },
+      },
+      replayed: true,
+      latestOrder: null,
+      verified: false,
+      verificationError: 'Need replay check',
+    });
+
+    const onVerifyOrder = jest.fn().mockImplementation((id: string) => {
+      if (id === orderA.id) {
+        return deferredVerifyA.promise;
+      }
+      return Promise.resolve({ ...orderB, status: 'PAID' });
+    });
+
+    const view = mount(PaymentCheckoutPhone, {
+      isDemo: false,
+      order: orderA,
+      onExecutePayment,
+      onVerifyOrder,
+      onPaymentCommitted,
+    });
+
+    // Step 1: Initial pay call sets verificationPending
+    await view.clickButton('Xác nhận thanh toán • 90.000 ₫');
+    expect(view.getText()).toContain('Thử xác minh lại trạng thái đơn');
+
+    // Step 2: Start verification for A (in flight)
+    const verifyPromise = view.clickButton('Thử xác minh lại trạng thái đơn');
+    expect(onVerifyOrder).toHaveBeenCalledWith(orderA.id);
+
+    // Step 3: Switch parent to order B while verification for A is in-flight
+    view.rerender({
+      isDemo: false,
+      order: orderB,
+      onExecutePayment,
+      onVerifyOrder,
+      onPaymentCommitted,
+    });
+
+    // Order B is displayed cleanly
+    expect(view.getText()).toContain('BL-VERIFY-B');
+    expect(view.getText()).not.toContain('Thử xác minh lại trạng thái đơn');
+
+    // Step 4: Late verification for A completes as PAID
+    deferredVerifyA.resolve({
+      ...orderA,
+      status: 'PAID',
+    });
+    await verifyPromise;
+
+    // Verification of A must be ignored: no commit callback for A, view still displays order B
+    expect(onPaymentCommitted).not.toHaveBeenCalled();
+    expect(view.getText()).toContain('BL-VERIFY-B');
+    expect(view.getText()).not.toContain('BL-VERIFY-A');
+    expect(view.getText()).not.toContain('Xác minh thành công');
+  });
+
+  it('P1 - Race condition (Switch A -> B -> A): Chuyen A -> B -> A khi request cu cua A chua hoan tat -> request cu bi loai bo an toan', async () => {
+    const orderA = { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', code: 'BL-SWITCH-A', subtotal: 90000, discount: 0, total: 90000 };
+    const orderB = { id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', code: 'BL-SWITCH-B', subtotal: 60000, discount: 0, total: 60000 };
+
+    const deferredAttempt1 = createDeferred<Record<string, unknown>>();
+    const deferredAttempt2 = createDeferred<Record<string, unknown>>();
+    const onPaymentCommitted = jest.fn();
+
+    let attemptCount = 0;
+    const onExecutePayment = jest.fn().mockImplementation(() => {
+      attemptCount += 1;
+      if (attemptCount === 1) {
+        return deferredAttempt1.promise;
+      }
+      return deferredAttempt2.promise;
+    });
+
+    const view = mount(PaymentCheckoutPhone, {
+      isDemo: false,
+      order: orderA,
+      onExecutePayment,
+      onPaymentCommitted,
+    });
+
+    // 1. Start payment for A (attempt 1 in flight)
+    const clickAttempt1 = view.clickButton('Xác nhận thanh toán • 90.000 ₫');
+    expect(onExecutePayment).toHaveBeenCalledTimes(1);
+
+    // 2. Switch A -> B
+    view.rerender({
+      isDemo: false,
+      order: orderB,
+      onExecutePayment,
+      onPaymentCommitted,
+    });
+    expect(view.getText()).toContain('BL-SWITCH-B');
+
+    // 3. Switch B -> A while attempt 1 is still in flight!
+    view.rerender({
+      isDemo: false,
+      order: orderA,
+      onExecutePayment,
+      onPaymentCommitted,
+    });
+    expect(view.getText()).toContain('BL-SWITCH-A');
+    // Button must be active for fresh payment
+    expect(view.getText()).toContain('Xác nhận thanh toán • 90.000 ₫');
+
+    // 4. Old attempt 1 resolves with PAID
+    deferredAttempt1.resolve({
+      result: {
+        payment: { id: 'pay-a1', orderId: orderA.id, idempotencyKey: 'key-1', amount: 90000, method: 'WALLET', status: 'SUCCEEDED' },
+        order: { ...orderA, status: 'PAID' },
+      },
+      replayed: false,
+      latestOrder: { ...orderA, status: 'PAID' },
+      verified: true,
+    });
+    await clickAttempt1;
+
+    // Stale attempt 1 must be discarded: onPaymentCommitted not called, screen still at state 0
+    expect(onPaymentCommitted).not.toHaveBeenCalled();
+    expect(view.getText()).toContain('Xác nhận thanh toán • 90.000 ₫');
+    expect(view.getText()).not.toContain('Thanh toán thành công');
+
+    // 5. Start attempt 2 on order A
+    const clickAttempt2 = view.clickButton('Xác nhận thanh toán • 90.000 ₫');
+    expect(onExecutePayment).toHaveBeenCalledTimes(2);
+
+    // 6. Attempt 2 resolves
+    deferredAttempt2.resolve({
+      result: {
+        payment: { id: 'pay-a2', orderId: orderA.id, idempotencyKey: 'key-2', amount: 90000, method: 'WALLET', status: 'SUCCEEDED' },
+        order: { ...orderA, status: 'PAID' },
+      },
+      replayed: false,
+      latestOrder: { ...orderA, status: 'PAID' },
+      verified: true,
+    });
+    await clickAttempt2;
+
+    // Attempt 2 succeeds and commits!
+    expect(onPaymentCommitted).toHaveBeenCalledTimes(1);
+    expect(onPaymentCommitted.mock.calls[0][0].order.id).toBe(orderA.id);
+    expect(view.getText()).toContain('Thanh toán thành công');
+  });
+
+  it('P1 - Race condition (New attempt on same order): Parent supplies new idempotencyKey while old request is in-flight -> old response is discarded, new attempt succeeds', async () => {
+    const order = { id: orderId, code: 'BL-SAME-ORDER', subtotal: 90000, discount: 0, total: 90000 };
+    const key1 = '33333333-3333-4333-8333-333333333333';
+    const key2 = '44444444-4444-4444-8444-444444444444';
+
+    const deferredReq1 = createDeferred<Record<string, unknown>>();
+    const deferredReq2 = createDeferred<Record<string, unknown>>();
+    const onPaymentCommitted = jest.fn();
+
+    const onExecutePayment = jest.fn().mockImplementation((payload: { idempotencyKey: string }) => {
+      if (payload.idempotencyKey === key1) {
+        return deferredReq1.promise;
+      }
+      return deferredReq2.promise;
+    });
+
+    const view = mount(PaymentCheckoutPhone, {
+      isDemo: false,
+      order,
+      idempotencyKey: key1,
+      onExecutePayment,
+      onPaymentCommitted,
+    });
+
+    // 1. Click button: start attempt 1 with key1 (in-flight)
+    const clickAttempt1 = view.clickButton('Xác nhận thanh toán • 90.000 ₫');
+    expect(onExecutePayment).toHaveBeenCalledTimes(1);
+    expect(onExecutePayment.mock.calls[0][0].idempotencyKey).toBe(key1);
+
+    // 2. While request 1 is still in-flight, parent supplies new idempotencyKey key2
+    view.rerender({
+      isDemo: false,
+      order,
+      idempotencyKey: key2,
+      onExecutePayment,
+      onPaymentCommitted,
+    });
+
+    // 3. Request 1 resolves with PAID
+    deferredReq1.resolve({
+      result: {
+        payment: { id: paymentId, orderId, idempotencyKey: key1, amount: 90000, method: 'WALLET', status: 'SUCCEEDED' },
+        order: { ...order, status: 'PAID' },
+      },
+      replayed: false,
+      latestOrder: { ...order, status: 'PAID' },
+      verified: true,
+    });
+    await clickAttempt1;
+
+    // Stale request 1 is discarded!
+    expect(onPaymentCommitted).not.toHaveBeenCalled();
+    expect(view.getText()).not.toContain('Thanh toán thành công');
+
+    // 4. Now send attempt 2 with key2
+    const clickAttempt2 = view.clickButton('Xác nhận thanh toán • 90.000 ₫');
+    expect(onExecutePayment).toHaveBeenCalledTimes(2);
+    expect(onExecutePayment.mock.calls[1][0].idempotencyKey).toBe(key2);
+
+    // 5. Request 2 resolves
+    deferredReq2.resolve({
+      result: {
+        payment: { id: paymentId, orderId, idempotencyKey: key2, amount: 90000, method: 'WALLET', status: 'SUCCEEDED' },
+        order: { ...order, status: 'PAID' },
+      },
+      replayed: false,
+      latestOrder: { ...order, status: 'PAID' },
+      verified: true,
+    });
+    await clickAttempt2;
+
+    // Attempt 2 succeeds and commits!
+    expect(onPaymentCommitted).toHaveBeenCalledTimes(1);
+    expect(onPaymentCommitted.mock.calls[0][0].idempotencyKey).toBe(key2);
+    expect(view.getText()).toContain('Thanh toán thành công');
+  });
 });

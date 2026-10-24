@@ -1079,15 +1079,19 @@ export function PaymentCheckoutPhone({
     setReplayed(false);
     setVerificationPending(false);
     setVerificationErrorText(null);
+    setBusy(false);
     if (state !== 0) {
       setState(0);
     }
   }
 
-  const trackedOrderId = useRef<string | undefined>(order?.id);
+  const activeRequestIdRef = useRef<number>(0);
+  const activeOrderIdRef = useRef<string | undefined>(order?.id);
+
   useEffect(() => {
-    trackedOrderId.current = order?.id;
-  }, [order?.id]);
+    activeOrderIdRef.current = order?.id;
+    activeRequestIdRef.current += 1;
+  }, [order?.id, idempotencyKeyProp]);
 
   const resultRef = useRef<HTMLDivElement | null>(null);
 
@@ -1205,9 +1209,21 @@ export function PaymentCheckoutPhone({
     }
 
     if (onExecutePayment) {
-      setBusy(true);
+      const currentRequestId = ++activeRequestIdRef.current;
       const requestOrderId = effectiveOrderId;
       const requestKey = keyValue;
+      setBusy(true);
+
+      const isCurrent = () => {
+        if (isDemoMode) {
+          return true;
+        }
+        const matchesOrder =
+          activeOrderIdRef.current === requestOrderId ||
+          (!activeOrderIdRef.current && !requestOrderId);
+        return activeRequestIdRef.current === currentRequestId && matchesOrder;
+      };
+
       try {
         const executionOutcome = await onExecutePayment({
           orderId: requestOrderId,
@@ -1216,8 +1232,8 @@ export function PaymentCheckoutPhone({
           mockOutcome: outcome,
         });
 
-        // Guard against late response from an order that was switched away while request was in-flight
-        if (!isDemoMode && order?.id && order.id !== requestOrderId) {
+        // Guard against late response from an obsolete request or different order
+        if (!isCurrent()) {
           return;
         }
 
@@ -1288,7 +1304,7 @@ export function PaymentCheckoutPhone({
           });
         }
       } catch (err: unknown) {
-        if (!isDemoMode && order?.id && order.id !== requestOrderId) {
+        if (!isCurrent()) {
           return;
         }
         setBusy(false);
@@ -1353,11 +1369,23 @@ export function PaymentCheckoutPhone({
       notify('Không có hàm xác minh đơn hàng.');
       return;
     }
-    setBusy(true);
+    const currentRequestId = ++activeRequestIdRef.current;
     const requestOrderId = effectiveOrderId;
+    setBusy(true);
+
+    const isCurrent = () => {
+      if (isDemoMode) {
+        return true;
+      }
+      const matchesOrder =
+        activeOrderIdRef.current === requestOrderId ||
+        (!activeOrderIdRef.current && !requestOrderId);
+      return activeRequestIdRef.current === currentRequestId && matchesOrder;
+    };
+
     try {
       const fresh = await onVerifyOrder(requestOrderId);
-      if (!isDemoMode && order?.id && order.id !== requestOrderId) {
+      if (!isCurrent()) {
         return;
       }
       setConfirmedOrder(fresh);
@@ -1398,7 +1426,7 @@ export function PaymentCheckoutPhone({
         notify(`Xác minh hoàn tất: Đơn hàng ở trạng thái ${fresh.status}.`);
       }
     } catch (err: unknown) {
-      if (!isDemoMode && order?.id && order.id !== requestOrderId) {
+      if (!isCurrent()) {
         return;
       }
       setBusy(false);
@@ -1410,6 +1438,8 @@ export function PaymentCheckoutPhone({
   };
 
   const reset = () => {
+    activeRequestIdRef.current += 1;
+    setBusy(false);
     setState(0);
     setDetails(false);
     setReplayed(false);
@@ -1427,6 +1457,7 @@ export function PaymentCheckoutPhone({
   };
 
   const retryWithNewKey = () => {
+    activeRequestIdRef.current += 1;
     // Keep the failed order as price/items snapshot; backend re-reserves stock and moves the order state.
     if (confirmedOrder && (!order?.id || confirmedOrder.id === order.id)) {
       setRetryOrder(confirmedOrder);
@@ -1438,6 +1469,7 @@ export function PaymentCheckoutPhone({
     setVerificationPending(false);
     setVerificationErrorText(null);
     setConfirmedPayment(null);
+    setBusy(false);
     setState(0);
     setInternalOutcome('SUCCESS');
     onMockOutcomeChange?.('SUCCESS');
