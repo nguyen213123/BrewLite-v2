@@ -41,7 +41,7 @@ export default function CartPage() {
           <>
             <ul className="mt-10 space-y-4" aria-label="Các món trong giỏ">
               {lines.map((line) => (
-                <CartLineRow key={line.key} line={line} onQtyChange={setQty} onRemove={removeItem} />
+                <CartLineRow key={line.id || line.key} line={line} onQtyChange={setQty} onRemove={removeItem} />
               ))}
             </ul>
             <section className="mt-8 rounded-2xl border border-[#cdd5c8] bg-white/60 p-6" aria-label="Tạm tính">
