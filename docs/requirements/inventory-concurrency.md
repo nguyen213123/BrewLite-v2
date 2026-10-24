@@ -82,3 +82,18 @@ docker compose exec db psql -U brewlite -d brewlite -c 'DROP DATABASE "brewlite_
 ```
 
 Với `stock = N`, tổng số đơn giữ được hàng luôn `<= N` và `stock` cuối cùng bằng `N` trừ số đơn thành công, không bao giờ âm. Khi tranh chấp cao, một số request có thể nhận `STOCK_CONFLICT` dù còn hàng; đó là kết quả hợp lệ và client gửi lại.
+
+## Kết quả chạy trên PostgreSQL thật
+
+Chạy ngày 24/10/2026 trên PostgreSQL 17 của `docker compose` (service `db`), lệnh `npm --prefix backend test -- inventory.integration unit-of-work.integration` với `RUN_DB_TESTS=1`. Mỗi suite tự tạo database tạm `brewlite_test_<ngẫu nhiên>`, áp dụng đủ migration và xóa sau khi xong. Kết quả: 2 suite, 6/6 test đạt (tổng 26,2 giây). Sau khi chạy, truy vấn `pg_database` không còn database `brewlite_test_%` nào (0 dòng), và database phát triển `brewlite` không nhận dữ liệu mẫu.
+
+| Suite | Kịch bản | Kết quả kiểm chứng |
+| --- | --- | --- |
+| `inventory.integration` | `stock = 1`, 10 request đồng thời | Đúng 1 request giữ được, 9 request bị từ chối (`OUT_OF_STOCK` hoặc `STOCK_CONFLICT`), `stock` cuối = 0 |
+| `inventory.integration` | `stock = 5`, 20 request đồng thời | Số request thành công từ 1 đến 5, `stock` cuối bằng 5 trừ số request thành công, không âm |
+| `inventory.integration` | Đơn có hai dòng cùng sản phẩm, tổng vượt tồn | `OUT_OF_STOCK`, `stock` không đổi |
+| `inventory.integration` | Hai sản phẩm, sản phẩm thứ hai hết hàng | `OUT_OF_STOCK`, lượt giữ ở sản phẩm thứ nhất được rollback |
+| `inventory.integration` | Cùng một đơn `release` 3 lần đồng thời | `stock` tăng đúng một lần, đơn ở `RELEASED` |
+| `unit-of-work.integration` | Hai transaction khóa hai sản phẩm theo thứ tự ngược nhau (deadlock thật) | PostgreSQL hủy một bên, `UnitOfWork` chạy lại, cả hai cùng commit; tổng số lần chạy callback ít nhất 3; mỗi sản phẩm bị trừ đúng một lần cho mỗi bên (10 xuống 8) |
+
+Các kịch bản không đồng thời của `UnitOfWork` (hết 3 lượt trả `STOCK_CONFLICT`, rollback sản phẩm đã trừ trước đó, không thử lại lỗi nghiệp vụ, rollback bản ghi idempotency cùng lần thử bị hủy) được kiểm chứng ở `unit-of-work.e2e-spec.ts` bằng `$transaction` giả có rollback, vì không thể ép PostgreSQL deadlock đủ 3 lần liên tiếp một cách ổn định. Chưa có test tích hợp qua `POST /orders` và luồng thanh toán của TV5; cần chạy lại khi các phần đó được nối.
