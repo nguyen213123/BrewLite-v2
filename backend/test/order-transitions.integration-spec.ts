@@ -33,7 +33,7 @@ integration('Order state machine on PostgreSQL', () => {
     prisma = new PrismaService();
     unitOfWork = new UnitOfWork(prisma);
     transitions = new OrderTransactionsService(new InventoryService(), promotions as never);
-    orders = new OrdersService(unitOfWork, {} as never, {} as never, {} as never, transitions, loyalty as never);
+    orders = new OrdersService(unitOfWork, {} as never, {} as never, {} as never, transitions, loyalty as never, new InventoryService());
   }, 120_000);
   afterAll(async () => {
     try {

@@ -13,7 +13,7 @@ function StatusAlert({ status }: { status: OrderStatus }) {
         <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
           <p className="font-semibold">Thanh toán thành công!</p>
           <p className="mt-0.5 text-xs text-emerald-700">
-            Đơn hàng của bạn đã được xác nhận và chuyển tới quầy chuẩn bị đồ uống.
+            Hệ thống đã xác nhận thanh toán. Đơn đang chờ bắt đầu pha chế.
           </p>
         </div>
       );
@@ -202,6 +202,11 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
         </div>
 
         <StatusAlert status={order.status} />
+        {['PENDING', 'PAYMENT_FAILED', 'PAID'].includes(order.status) && (
+          <Link href={`/checkout?orderId=${order.id}`} className="mt-4 inline-block rounded-lg bg-[#263c30] px-4 py-3 text-sm font-semibold text-white">
+            {order.status === 'PAID' ? 'Quản lý thanh toán / hủy trước pha chế' : 'Tiếp tục thanh toán / hủy đơn'}
+          </Link>
+        )}
 
         <div>
           <h2 className="text-base font-bold text-[#263c30] mb-4">Các món đã đặt (Snapshot)</h2>

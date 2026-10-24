@@ -168,6 +168,7 @@ function setup(options: { resolveError?: Error; promo?: PromotionSnapshot; promo
     idempotency as unknown as ServiceDeps[3],
     {} as ServiceDeps[4], // OrderTransactionsPort: not used by quote/create
     {} as ServiceDeps[5], // LoyaltyTransactionsPort: not used by quote/create
+    { reserve: jest.fn().mockResolvedValue(undefined) } as unknown as ServiceDeps[6],
   );
   return { service, tx, catalog, promotions, idempotency, created, events };
 }

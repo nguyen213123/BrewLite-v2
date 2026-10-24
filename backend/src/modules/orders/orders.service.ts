@@ -3,6 +3,7 @@ import { Injectable } from '@nestjs/common';
 import {
   CatalogPricingPort,
   IdempotencyPort,
+  InventoryPort,
   LoyaltyTransactionsPort,
   OrderTransactionsPort,
   OrdersPort,
@@ -26,6 +27,7 @@ export class OrdersService implements OrdersPort {
     private readonly idempotency: IdempotencyPort,
     private readonly transitions: OrderTransactionsPort,
     private readonly loyalty: LoyaltyTransactionsPort,
+    private readonly inventory: InventoryPort,
   ) {}
 
   // Preview only: no order, no stock hold and no promotion counter change (business-rules §2.7).
@@ -48,7 +50,7 @@ export class OrdersService implements OrdersPort {
       async tx => {
         const { quote, promo } = await this.priceCart(tx, items, input.promotionCode);
         if (promo.promotionId) await this.promotions.reserve(tx, promo.promotionId);
-        // TODO(#9): await this.inventory.reserve(tx, items) goes here, in the same transaction.
+        await this.inventory.reserve(tx, items);
         const order = await tx.order.create({
           data: {
             code: generateOrderCode(),
