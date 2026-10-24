@@ -22,8 +22,6 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
   const router = useRouter();
   const lines = useCartStore(s => s.lines);
   const [promo, setPromo] = useState('');
-  const [method, setMethod] = useState<PaymentMethod>('WALLET');
-  const [outcome, setOutcome] = useState<'SUCCESS' | 'FAIL'>('SUCCESS');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [quote, setQuote] = useState<{ fingerprint: string; value: Quote }>();
@@ -43,11 +41,15 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
     });
   });
   const [state, setState] = useState(session.snapshot);
+  const [method, setMethod] = useState<PaymentMethod>(state.attempt?.request.method ?? 'WALLET');
+  const [outcome, setOutcome] = useState<'SUCCESS' | 'FAIL'>(state.attempt?.request.mockOutcome ?? 'SUCCESS');
   const [busy, setBusy] = useState(Boolean(state.orderId || initialOrderId));
   const request = { items: toCartItems(lines), ...(promo.trim() ? { promotionCode: promo.trim().toUpperCase() } : {}) };
   const fingerprint = JSON.stringify(request);
   const currentQuote = quote?.fingerprint === fingerprint ? quote.value : undefined;
   const order = state.order;
+  const replayAttempt = state.attempt && !(state.verified && order?.status === 'PAYMENT_FAILED')
+    ? state.attempt : undefined;
   const paid = state.verified && order && paidStatuses.includes(order.status);
   const terminal = state.verified && order && (paid || order.status === 'CANCELLED');
 
@@ -107,8 +109,8 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
       {state.orderId && <button disabled={busy} onClick={() => run(() => session.verify())}>Xác minh lại trạng thái đơn</button>}
       {order && !terminal && <section className="shop-panel"><h2>Thanh toán mô phỏng</h2>
         {state.attempt && <p>Lần thanh toán hiện tại được lưu để thử lại an toàn sau lỗi mạng.</p>}
-        <label>Phương thức <select value={method} disabled={busy || Boolean(state.attempt) && order.status !== 'PAYMENT_FAILED'} onChange={e => setMethod(e.target.value as PaymentMethod)}><option value="WALLET">Ví điện tử</option><option value="CARD">Thẻ ngân hàng</option></select></label>
-        <label>Kịch bản <select value={outcome} disabled={busy || Boolean(state.attempt) && order.status !== 'PAYMENT_FAILED'} onChange={e => setOutcome(e.target.value as 'SUCCESS' | 'FAIL')}><option value="SUCCESS">Thành công</option><option value="FAIL">Thất bại</option></select></label>
+        <label>Phương thức <select value={replayAttempt?.request.method ?? method} disabled={busy || Boolean(replayAttempt)} onChange={e => setMethod(e.target.value as PaymentMethod)}><option value="WALLET">Ví điện tử</option><option value="CARD">Thẻ ngân hàng</option></select></label>
+        <label>Kịch bản <select value={replayAttempt ? replayAttempt.request.mockOutcome ?? 'SUCCESS' : outcome} disabled={busy || Boolean(replayAttempt)} onChange={e => setOutcome(e.target.value as 'SUCCESS' | 'FAIL')}><option value="SUCCESS">Thành công</option><option value="FAIL">Thất bại</option></select></label>
         {order.status === 'PAYMENT_FAILED' && state.verified ? <>
           <p>Thanh toán thất bại. Giỏ hàng được giữ; kho và lượt khuyến mãi đã trả lại.</p>
           <button disabled={busy} onClick={() => run(() => session.pay(method, outcome, true))}>Thử lại thanh toán bằng khóa mới</button>

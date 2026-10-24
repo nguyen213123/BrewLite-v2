@@ -22,8 +22,60 @@ function setup() {
   };
   return { deps, creates, pays, settled, make: () => createCheckoutSession('user', deps),
     status: (status: Order['status']) => { current = { ...current, status }; },
-    logout: () => { active = false; } };
+    logout: () => { active = false; }, login: () => { active = true; } };
 }
+it('keeps an unresolved committed create through timeout, 401, reload and re-login', async () => {
+  const h = setup();
+  const committed = new Map<string, Order>();
+  let calls = 0;
+  h.deps.create = async (key, body) => {
+    h.creates.push([key, body]);
+    if (++calls === 1) {
+      committed.set(key, pending);
+      throw new Error('Order committed but the response timed out');
+    }
+    if (calls === 2) {
+      h.logout();
+      throw Object.assign(new Error('Expired JWT'), { statusCode: 401, code: 'UNAUTHORIZED' });
+    }
+    return committed.get(key)!;
+  };
+  const first = h.make();
+  await assert.rejects(first.create(request, purchased));
+  await assert.rejects(first.create(request, purchased));
+  h.login();
+  const restored = h.make();
+  assert.equal(restored.snapshot().createUncertain, true);
+  assert.throws(() => restored.startOver());
+  await restored.create({ items: [{ productId: 'different-cart', size: 'S', qty: 1 }] }, []);
+  assert.deepEqual(h.creates[0], h.creates[1]);
+  assert.deepEqual(h.creates[0], h.creates[2]);
+  assert.equal(restored.snapshot().orderId, pending.id);
+  assert.deepEqual(restored.snapshot().purchased, purchased);
+  assert.equal(committed.size, 1);
+});
+it('does not reinterpret later 4xx as proof that an earlier timed-out create rolled back', async () => {
+  for (const statusCode of [400, 401, 403, 404, 408, 409, 422, 429]) {
+    const h = setup();
+    h.deps.create = async () => { throw new Error('Unknown create result'); };
+    await assert.rejects(h.make().create(request, purchased));
+    h.deps.create = async () => { throw Object.assign(new Error('Retry rejected'), { statusCode, code: 'HTTP_ERROR' }); };
+    const restored = h.make();
+    await assert.rejects(restored.create(request, purchased));
+    assert.equal(h.make().snapshot().createUncertain, true, `status ${statusCode}`);
+    assert.throws(() => h.make().startOver());
+  }
+});
+it('a definitely rejected first create can be corrected without blocking checkout forever', async () => {
+  for (const [statusCode, code] of [[400, 'VALIDATION_ERROR'], [401, 'UNAUTHORIZED'], [409, 'OUT_OF_STOCK']] as const) {
+    const h = setup();
+    h.deps.create = async () => { throw Object.assign(new Error('Initial request rejected'), { statusCode, code }); };
+    await assert.rejects(h.make().create(request, purchased));
+    const restored = h.make();
+    assert.equal(restored.snapshot().createUncertain, false);
+    assert.doesNotThrow(() => restored.startOver());
+  }
+});
 it('create timeout + reload retries the original key, payload and cart snapshot', async () => {
   const h = setup();
   h.deps.create = async (...args) => { h.creates.push(args); throw new Error('timeout'); };

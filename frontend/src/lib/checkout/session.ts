@@ -84,10 +84,11 @@ export function createCheckoutSession(userId: string, deps: CheckoutDependencies
     create: (request: OrderRequest, purchased: PurchasedLine[]) => exclusive(async () => {
       if (!state.request) {
         state = { userId, request: structuredClone(request), purchased: structuredClone(purchased),
-          createKey: deps.key(), createUncertain: true };
+          createKey: deps.key(), createUncertain: false };
         save();
       }
       if (!state.orderId) {
+        const previousCreateWasUncertain = state.createUncertain === true;
         state.createUncertain = true;
         save();
         try {
@@ -98,7 +99,12 @@ export function createCheckoutSession(userId: string, deps: CheckoutDependencies
           save();
         } catch (error) {
           const e = error as { statusCode?: number; code?: string };
-          if (e.statusCode && e.statusCode >= 400 && e.statusCode < 500 && e.code !== 'IDEMPOTENCY_IN_PROGRESS') {
+          // A rejected retry says nothing about an earlier POST whose response was lost.
+          // In particular a 401 happens before the idempotency lookup. Keep its original
+          // key/payload through re-login until the server can recover that same request.
+          const definitelyRejected = [400, 401, 403, 404, 409, 422].includes(e.statusCode ?? 0) &&
+            !e.code?.startsWith('IDEMPOTENCY_');
+          if (!previousCreateWasUncertain && definitelyRejected) {
             state.createUncertain = false;
             save();
           }

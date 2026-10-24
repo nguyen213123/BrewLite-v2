@@ -8,7 +8,7 @@
     "start": "next start --hostname 0.0.0.0",
     "lint": "eslint . --max-warnings 0",
     "typecheck": "tsc --noEmit",
-    "test": "node --test src/lib/cart/cart-store.test.ts src/lib/checkout/session.test.ts"
+    "test": "node --test src/lib/cart/cart-store.test.ts src/lib/checkout/session.test.ts src/components/checkout/Checkout.test.ts"
   },
   "dependencies": {
     "next": "^16.4.2",

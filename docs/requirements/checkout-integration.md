@@ -35,7 +35,9 @@ Phạm vi: API PostgreSQL thật, gateway thanh toán mô phỏng WALLET/CARD. G
 
 ## Kiểm thử tự động
 
-Kết quả local ngày 24/10/2026: 21 suite backend, **367/367 test đạt với PostgreSQL thật**, không bỏ qua; frontend cart/checkout **31/31 test đạt**. Lint, TypeScript, build hai ứng dụng và kiểm tra hợp đồng đạt. Database test/preview tách khỏi database phát triển.
+Kết quả kiểm thử: 21 suite backend, **367/367 test đạt với PostgreSQL thật**, không bỏ qua; frontend cart/checkout **35/35 test đạt**. Lint, TypeScript, build hai ứng dụng và kiểm tra hợp đồng đạt. Database test/preview tách khỏi database phát triển.
+
+Bổ sung hồi quy ngày 25/10/2026 cho PR #31: sau khi POST có thể đã commit nhưng phản hồi bị mất, lỗi 401/4xx của lần gửi lại không được xóa trạng thái chưa rõ kết quả. Đăng nhập lại vẫn giữ khóa, payload và snapshot, chặn tạo đơn mới cho đến khi khôi phục được đơn cũ. Yêu cầu đầu tiên bị từ chối chắc chắn vẫn có thể sửa và bắt đầu lại. Test render component kiểm tra form khôi phục đúng CARD/FAIL từ attempt đã lưu, không hiển thị WALLET/SUCCESS; các control chỉ mở cho lần thử mới sau khi xác minh PAYMENT_FAILED.
 
 Đã thao tác trên browser production: đăng ký tài khoản thử, chọn Cappuccino M + Kem × 2, SAVE10 ra 108.000đ; FAIL giữ giỏ; reload rồi retry cùng mã đơn thành PAID, badge giỏ về 0 và điểm lên 10; reload không phát sinh lần trừ khác; mở lại qua chi tiết đơn rồi hủy PAID thành CANCELLED, điểm về 0. Không dùng tiền thật.
 
