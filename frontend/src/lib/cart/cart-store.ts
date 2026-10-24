@@ -126,6 +126,7 @@ export const useCartStore = create<CartState>()(
     {
       name: 'brewlite-cart',
       version: 1,
+      migrate: (persisted) => (persisted && typeof persisted === 'object' ? (persisted as { lines: CartLine[] }) : { lines: [] }),
       storage: createJSONStorage(() => localStorage),
       partialize: (s) => ({ lines: s.lines }),
     },
