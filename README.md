@@ -68,8 +68,25 @@ Backend tự áp dụng migration đã commit trước khi chạy. Backend conta
 | `npm run db:migrate -- --name ten_thay_doi` | Tạo và áp dụng migration khi phát triển |
 | `npm --prefix backend run prisma:deploy` | Áp dụng migration đã commit |
 | `npm run db:studio` | Mở Prisma Studio |
+| `npm --prefix backend run build:seed` | Biên dịch riêng seed script |
+| `npm --prefix backend run seed` | Nạp hoặc cập nhật dữ liệu mẫu |
 
 Các lệnh Prisma chạy trong backend và đọc `backend/.env`. Client được sinh vào `backend/src/generated/prisma`, không commit. Commit schema, migration và ba package-lock.json. Sau khi cài lại, chạy db:generate trước npm test; build/dev đã tự generate.
+
+## Nạp dữ liệu mẫu (Seed)
+
+Sau khi cấu hình `backend/.env` và cài dependencies, chạy các lệnh sau tại thư mục gốc project:
+
+```powershell
+npm --prefix backend run prisma:deploy
+npm --prefix backend run build
+npm --prefix backend run build:seed
+npm --prefix backend run seed
+```
+
+Seed tạo hoặc cập nhật 17 sản phẩm, 5 topping, các kích thước sản phẩm và 3 mã khuyến mãi. Chạy lại seed không tạo thêm bản ghi trùng đối với các dữ liệu được đồng bộ bằng ID hoặc mã cố định.
+
+**Lưu ý:** Mỗi lần chạy seed, tồn kho (`stock`) của sản phẩm và số lượt sử dụng (`usedCount`) của khuyến mãi được đặt lại về giá trị mẫu. Không chạy seed trên database có dữ liệu cần giữ nếu chưa sao lưu.
 
 ## Cấu trúc và cách đóng góp
 
