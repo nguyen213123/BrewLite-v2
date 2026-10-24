@@ -49,6 +49,7 @@ jobs:
       - run: npm --prefix backend run prisma:deploy
       - run: npm run lint
       - run: npm test
+      - run: npm --prefix frontend test
       - run: npm run build
       - name: Smoke test API and database
         shell: bash

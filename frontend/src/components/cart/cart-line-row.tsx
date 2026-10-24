@@ -27,42 +27,17 @@ export function CartLineRow({ line, onQtyChange, onRemove }: Props) {
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const nextText = e.target.value;
     setVal(nextText);
+    const text = nextText.trim();
 
-    if (nextText.trim() === '') {
-      setError('Vui lòng nhập số lượng');
-      return;
-    }
+    if (text === '') return setError('Vui lòng nhập số lượng');
+    if (text.includes('.') || text.includes(',')) return setError('Số lượng không được là số thập phân');
+    if (text.startsWith('-')) return setError('Số lượng không được nhỏ hơn 0');
+    // Chỉ chấp nhận chữ số: chặn "1e1", "0x10", "+5"...
+    if (!/^\d+$/.test(text)) return setError('Số lượng không hợp lệ');
 
-    if (nextText.includes('.') || nextText.includes(',')) {
-      setError('Số lượng không được là số thập phân');
-      return;
-    }
-
-    const num = Number(nextText);
-    if (!Number.isFinite(num)) {
-      setError('Số lượng không hợp lệ');
-      return;
-    }
-
-    if (!Number.isInteger(num)) {
-      setError('Số lượng không được là số thập phân');
-      return;
-    }
-
-    if (num === 0) {
-      setError('Số lượng không được bằng 0');
-      return;
-    }
-
-    if (num < 0) {
-      setError('Số lượng không được nhỏ hơn 0');
-      return;
-    }
-
-    if (num > MAX_QTY) {
-      setError(`Số lượng tối đa là ${MAX_QTY}`);
-      return;
-    }
+    const num = Number(text);
+    if (num === 0) return setError('Số lượng không được bằng 0');
+    if (num > MAX_QTY) return setError(`Số lượng tối đa là ${MAX_QTY}`);
 
     try {
       onQtyChange(line.key, num);
