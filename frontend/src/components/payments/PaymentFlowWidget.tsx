@@ -656,6 +656,7 @@ export function PaymentPriceSummary({
   busy = false,
   isDemo = false,
   status = 'PENDING',
+  failedResultVisible = false,
   verificationPending = false,
   onConfirm,
   onVerify,
@@ -669,6 +670,7 @@ export function PaymentPriceSummary({
   busy?: boolean;
   isDemo?: boolean;
   status?: Api.OrderStatus;
+  failedResultVisible?: boolean;
   verificationPending?: boolean;
   onConfirm?: () => void;
   onVerify?: () => void;
@@ -765,7 +767,7 @@ export function PaymentPriceSummary({
             <span>Đơn hàng đã được xác nhận thanh toán thành công</span>
           </div>
         </div>
-      ) : status === 'PAYMENT_FAILED' ? (
+      ) : status === 'PAYMENT_FAILED' && failedResultVisible ? (
         <div style={{ marginTop: 20 }}>
           <PaymentButton
             type="button"
@@ -1043,8 +1045,12 @@ export function PaymentCheckoutPhone({
 
   // Adjust state during render when props change (standard React pattern without effect cascade)
   const [prevOrderId, setPrevOrderId] = useState(order?.id);
+  const [prevOrderPromo, setPrevOrderPromo] = useState(order?.promotionCode);
+  const [prevIdempotencyProp, setPrevIdempotencyProp] = useState(idempotencyKeyProp);
+
   if (!isDemoMode && order?.id !== prevOrderId) {
     setPrevOrderId(order?.id);
+    setPrevIdempotencyProp(idempotencyKeyProp);
     setKeyValue(idempotencyKeyProp ?? createPaymentIdempotencyKey());
     setRetryOrder(null);
     setConfirmedOrder(null);
@@ -1065,7 +1071,13 @@ export function PaymentCheckoutPhone({
     );
   }
 
-  const [prevIdempotencyProp, setPrevIdempotencyProp] = useState(idempotencyKeyProp);
+  if (!isDemoMode && order?.promotionCode !== prevOrderPromo) {
+    setPrevOrderPromo(order?.promotionCode);
+    if (order?.promotionCode !== undefined) {
+      setSelectedPromoCode(order.promotionCode);
+    }
+  }
+
   if (
     !isDemoMode &&
     idempotencyKeyProp !== undefined &&
@@ -1087,6 +1099,15 @@ export function PaymentCheckoutPhone({
 
   const activeRequestIdRef = useRef<number>(0);
   const activeOrderIdRef = useRef<string | undefined>(order?.id);
+  const isMountedRef = useRef(true);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      activeRequestIdRef.current += 1;
+    };
+  }, []);
 
   useEffect(() => {
     activeOrderIdRef.current = order?.id;
@@ -1215,6 +1236,9 @@ export function PaymentCheckoutPhone({
       setBusy(true);
 
       const isCurrent = () => {
+        if (!isMountedRef.current) {
+          return false;
+        }
         if (isDemoMode) {
           return true;
         }
@@ -1369,11 +1393,18 @@ export function PaymentCheckoutPhone({
       notify('Không có hàm xác minh đơn hàng.');
       return;
     }
+    if (busy) {
+      notify('Giao dịch đang xử lý. Vui lòng không nhấn liên tiếp.');
+      return;
+    }
     const currentRequestId = ++activeRequestIdRef.current;
     const requestOrderId = effectiveOrderId;
     setBusy(true);
 
     const isCurrent = () => {
+      if (!isMountedRef.current) {
+        return false;
+      }
       if (isDemoMode) {
         return true;
       }
@@ -1544,6 +1575,7 @@ export function PaymentCheckoutPhone({
           busy={busy}
           isDemo={isDemoMode}
           status={displayOrderStatus}
+          failedResultVisible={!verificationPending && state === 2}
           verificationPending={verificationPending}
           onConfirm={pay}
           onVerify={retryVerification}

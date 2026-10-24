@@ -2099,4 +2099,122 @@ describe('PaymentFlowWidget Component Render & Interaction Tests (#10)', () => {
     expect(onPaymentCommitted.mock.calls[0][0].idempotencyKey).toBe(key2);
     expect(view.getText()).toContain('Thanh toán thành công');
   });
+
+  it('Edge case 1: order with status PAYMENT_FAILED passed directly into PaymentCheckoutPhone renders confirm button and is payable (never stuck)', async () => {
+    const failedOrder = {
+      id: orderId,
+      code: 'BL-FAILED-ENTRY',
+      status: 'PAYMENT_FAILED' as const,
+      reservationStatus: 'RELEASED' as const,
+      subtotal: 90000,
+      discount: 0,
+      total: 90000,
+    };
+
+    const onExecutePayment = jest.fn().mockResolvedValue({
+      result: {
+        payment: { id: paymentId, orderId, idempotencyKey, amount: 90000, method: 'WALLET', status: 'SUCCEEDED' },
+        order: { ...failedOrder, status: 'PAID', reservationStatus: 'CONSUMED' },
+      },
+      replayed: false,
+      latestOrder: { ...failedOrder, status: 'PAID', reservationStatus: 'CONSUMED' },
+      verified: true,
+    });
+
+    const view = mount(PaymentCheckoutPhone, {
+      isDemo: false,
+      order: failedOrder,
+      onExecutePayment,
+    });
+
+    // Confirm button MUST be available for checkout (not stuck in failed scroll message)
+    expect(view.getButtons().some(b => b.text.includes('Xác nhận thanh toán • 90.000 ₫'))).toBe(true);
+    expect(view.getText()).not.toContain('Thanh toán thất bại • Xem chi tiết bên dưới');
+
+    // Click confirm to pay
+    await view.clickButton('Xác nhận thanh toán • 90.000 ₫');
+    expect(onExecutePayment).toHaveBeenCalledTimes(1);
+    expect(view.getText()).toContain('Thanh toán thành công');
+  });
+
+  it('Edge case 2: parent updates promotionCode on the same order dynamically updates promo code and discount', () => {
+    const baseOrder = {
+      id: orderId,
+      code: 'BL-PROMO-SYNC',
+      subtotal: 100000,
+      discount: 0,
+      total: 100000,
+      promotionCode: undefined as string | undefined,
+    };
+
+    const view = mount(PaymentCheckoutPhone, {
+      isDemo: false,
+      order: baseOrder,
+    });
+
+    expect(view.getText()).toContain('100.000 ₫');
+
+    // Parent applies promo code 'API15K' (discount 15000, total 85000)
+    view.rerender({
+      isDemo: false,
+      order: {
+        ...baseOrder,
+        promotionCode: 'API15K',
+        discount: 15000,
+        total: 85000,
+      },
+    });
+
+    expect(view.getText()).toContain('API15K');
+    expect(view.getText()).toContain('85.000 ₫');
+  });
+
+  it('Edge case 3: calling retryVerification while busy prevents duplicate verification requests', async () => {
+    const deferredVerify = createDeferred<Record<string, unknown>>();
+    const onVerifyOrder = jest.fn().mockImplementation(() => deferredVerify.promise);
+
+    const onExecutePayment = jest.fn().mockResolvedValue({
+      result: {
+        payment: { id: paymentId, orderId, idempotencyKey, amount: 90000, method: 'WALLET', status: 'SUCCEEDED' },
+        order: { id: orderId, code: 'BL-VERIFY-BUSY', status: 'PAID', subtotal: 90000, discount: 0, total: 90000 },
+      },
+      replayed: true,
+      latestOrder: null,
+      verified: false,
+    });
+
+    const view = mount(PaymentCheckoutPhone, {
+      isDemo: false,
+      order: { id: orderId, code: 'BL-VERIFY-BUSY', subtotal: 90000, discount: 0, total: 90000 },
+      onExecutePayment,
+      onVerifyOrder,
+    });
+
+    // 1. Initial pay sets verificationPending
+    await view.clickButton('Xác nhận thanh toán • 90.000 ₫');
+    expect(view.getText()).toContain('Thử xác minh lại trạng thái đơn');
+
+    // 2. Click verify (in-flight)
+    const verifyPromise = view.clickButton('Thử xác minh lại trạng thái đơn');
+    expect(onVerifyOrder).toHaveBeenCalledTimes(1);
+
+    // 3. Second click while busy should be prevented (button disabled or guard returns)
+    view.rerender();
+    const buttons = view.getButtons();
+    const verifyBtn = buttons.find(b => b.text.includes('xác minh'));
+    expect(verifyBtn?.disabled).toBe(true);
+
+    // Resolve verification
+    deferredVerify.resolve({
+      id: orderId,
+      code: 'BL-VERIFY-BUSY',
+      status: 'PAID',
+      subtotal: 90000,
+      discount: 0,
+      total: 90000,
+    });
+    await verifyPromise;
+    expect(onVerifyOrder).toHaveBeenCalledTimes(1);
+    expect(view.getText()).toContain('Thanh toán thành công');
+  });
 });
