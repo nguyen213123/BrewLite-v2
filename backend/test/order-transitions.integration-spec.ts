@@ -32,8 +32,9 @@ integration('Order state machine on PostgreSQL', () => {
     process.env.DATABASE_URL = tempDatabase.url;
     prisma = new PrismaService();
     unitOfWork = new UnitOfWork(prisma);
-    transitions = new OrderTransactionsService(new InventoryService(), promotions as never);
-    orders = new OrdersService(unitOfWork, {} as never, {} as never, {} as never, transitions, loyalty as never);
+    const inventory = new InventoryService();
+    transitions = new OrderTransactionsService(inventory, promotions as never);
+    orders = new OrdersService(unitOfWork, {} as never, {} as never, {} as never, transitions, loyalty as never, inventory);
   }, 120_000);
   afterAll(async () => {
     try {
