@@ -63,7 +63,7 @@ export function MenuGrid() {
     return (
       <div role="alert" className="rounded-2xl border border-brew-danger/30 bg-brew-danger-bg p-6">
         <h2 className="text-lg font-semibold text-brew-danger">Không tải được menu</h2>
-        <p className="mt-2 text-sm">{result.error}</p>
+        <p className="mt-2 text-sm">{result.error || 'Đã xảy ra lỗi không mong muốn.'}</p>
         <button
           type="button"
           onClick={() => setAttempt((value) => value + 1)}

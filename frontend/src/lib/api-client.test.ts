@@ -90,6 +90,64 @@ describe('apiRequest', () => {
       return true;
     });
   });
+
+  it('lỗi mạng khi đang đọc body thành NetworkError', async () => {
+    mockFetch(() => ({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      json: () => Promise.reject(new TypeError('network stream terminated')),
+    } as unknown as Response));
+    await assert.rejects(apiRequest('/products'), NetworkError);
+  });
+
+  it('timeout khi đang đọc body thành NetworkError', async () => {
+    mockFetch((_url, init) => ({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      json: () => new Promise<never>((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+      }),
+    } as unknown as Response));
+    await assert.rejects(apiRequest('/products', { timeoutMs: 20 }), (error: unknown) => {
+      assert.ok(error instanceof NetworkError);
+      return true;
+    });
+  });
+
+  it('người gọi chủ động hủy khi đang đọc body thì truyền tiếp lỗi hủy', async () => {
+    const controller = new AbortController();
+    mockFetch((_url, init) => ({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      json: () => new Promise<never>((_resolve, reject) => {
+        const onAbort = () => reject(new DOMException('aborted', 'AbortError'));
+        if (init.signal?.aborted) onAbort();
+        else init.signal?.addEventListener('abort', onAbort);
+        queueMicrotask(() => controller.abort());
+      }),
+    } as unknown as Response));
+    const pending = apiRequest('/products', { signal: controller.signal });
+    await assert.rejects(pending, (error: unknown) => {
+      assert.ok(!(error instanceof NetworkError));
+      return true;
+    });
+  });
+
+  it('HTTP 200 nhưng JSON không hợp lệ thì báo lỗi phản hồi, không trả data null', async () => {
+    mockFetch(() => new Response('<html>not-a-json</html>', {
+      status: 200,
+      headers: { 'Content-Type': 'text/html' },
+    }));
+    await assert.rejects(apiRequest('/products'), (error: unknown) => {
+      assert.ok(error instanceof ApiError);
+      assert.equal(error.status, 200);
+      assert.equal(error.code, 'HTTP_200');
+      return true;
+    });
+  });
 });
 
 describe('describeApiError', () => {

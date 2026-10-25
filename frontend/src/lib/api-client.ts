@@ -92,7 +92,14 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     let parsed: unknown = null;
     try {
       parsed = await response.json();
-    } catch {
+    } catch (error) {
+      if (signal?.aborted && !timedOut) throw error;
+      if (timedOut) throw new NetworkError('Máy chủ phản hồi quá lâu');
+      const isSyntaxError = error instanceof SyntaxError || (error as Error)?.name === 'SyntaxError';
+      if (!isSyntaxError) throw new NetworkError();
+      if (response.ok) {
+        throw new ApiError(response.status, `HTTP_${response.status}`, 'Phản hồi không phải JSON hợp lệ', [], null);
+      }
       parsed = null;
     }
 
