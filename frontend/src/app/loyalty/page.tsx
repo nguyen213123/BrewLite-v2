@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { apiGet, ApiRequestError } from '@/lib/api';
 import { subscribeAuth, getAuthSnapshot, getAuthServerSnapshot, updateUserPoints } from '@/lib/auth';
 import type { LoyaltyBalance, LoyaltyPage, LoyaltyEntry } from '@/lib/contracts/api.generated';
+import { formatVnd } from '@/lib/format';
 
 export default function LoyaltyPage() {
   const user = useSyncExternalStore(subscribeAuth, getAuthSnapshot, getAuthServerSnapshot);
@@ -65,170 +66,212 @@ export default function LoyaltyPage() {
 
   if (!user) {
     return (
-      <main className="mx-auto flex min-h-[60vh] max-w-lg flex-col items-center justify-center px-6 py-16 text-center">
-        <div className="rounded-full bg-[#263c30]/10 p-4 text-3xl">⭐</div>
-        <h1 className="mt-4 text-2xl font-bold text-[#263c30]">Cần đăng nhập</h1>
-        <p className="mt-2 text-sm text-[#263c30]/70">
-          Vui lòng đăng nhập để xem số điểm thưởng và lịch sử tích lũy của bạn.
-        </p>
-        <Link
-          href="/login"
-          className="mt-6 rounded-lg bg-[#263c30] px-6 py-2.5 text-sm font-semibold text-white shadow transition hover:bg-[#1f3026]"
-        >
-          Đăng nhập ngay
-        </Link>
+      <main className="mx-auto max-w-6xl px-6 py-12">
+        <div className="mx-auto max-w-lg rounded-2xl border border-[#e2d2b8] bg-[#efe5d4] p-10 text-center shadow-xs">
+          <div className="mx-auto grid size-14 place-items-center rounded-full bg-[#cbe8d3] text-3xl text-[#4a2e20]">
+            ★
+          </div>
+          <p className="eyebrow mt-4">BrewLite Mộc Vị / Loyalty</p>
+          <h1 className="mt-2 text-2xl font-extrabold text-[#4a2e20]">Cần đăng nhập</h1>
+          <p className="mt-2 text-sm text-[#7a6254]">
+            Vui lòng đăng nhập để xem số điểm thưởng và lịch sử tích lũy của bạn.
+          </p>
+          <Link
+            href="/login"
+            className="mt-6 inline-block rounded-full bg-[#6d4c3d] px-7 py-2.5 text-xs font-bold text-white shadow-xs transition hover:bg-[#563a2d]"
+          >
+            Đăng nhập ngay
+          </Link>
+        </div>
       </main>
     );
   }
 
   return (
-    <main className="mx-auto max-w-4xl px-6 py-10 space-y-8">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-[#cdd5c8] pb-6">
-        <div>
-          <h1 className="text-3xl font-bold text-[#263c30]">Điểm thưởng Loyalty</h1>
-          <p className="mt-1 text-sm text-[#263c30]/70">
-            Chương trình tri ân khách hàng thân thiết của BrewLite
-          </p>
-        </div>
-        <button
-          onClick={handleRefresh}
-          disabled={loading}
-          className="self-start sm:self-auto rounded-lg border border-[#cdd5c8] bg-white px-3.5 py-2 text-xs font-semibold text-[#263c30] shadow-sm transition hover:bg-[#263c30] hover:text-white disabled:opacity-50"
-        >
-          {loading ? 'Đang tải…' : '↻ Làm mới'}
-        </button>
-      </div>
-
-      {error && (
-        <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 flex items-center justify-between">
-          <span>{error}</span>
-          <button onClick={handleRefresh} className="underline font-semibold hover:no-underline ml-4">
-            Thử lại
+    <div>
+      {/* Banner Xanh Mint Pastel */}
+      <section className="border-b border-[#b5dcc0] bg-[#cbe8d3]">
+        <div className="mx-auto flex max-w-6xl flex-col gap-4 px-6 py-8 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="eyebrow">BrewLite Mộc Vị / Khách hàng thân thiết</p>
+            <h1 className="mt-1.5 text-3xl font-extrabold tracking-tight text-[#4a2e20] sm:text-4xl">
+              Điểm Thưởng Loyalty
+            </h1>
+            <p className="mt-1 text-sm text-[#5c4033]">
+              Chương trình tri ân khách hàng thân thiết của BrewLite Mộc Vị
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={handleRefresh}
+            disabled={loading}
+            className="self-start rounded-full border-2 border-[#6d4c3d] bg-white px-5 py-2 text-xs font-bold text-[#4a2e20] transition hover:bg-[#6d4c3d] hover:text-white disabled:opacity-50 sm:self-auto"
+          >
+            {loading ? 'Đang tải…' : '↻ Làm mới'}
           </button>
         </div>
-      )}
+      </section>
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div className="rounded-2xl border border-[#cdd5c8] bg-white p-6 shadow-sm flex items-center gap-5">
-          <div className="rounded-2xl bg-[#263c30] text-white p-4 text-2xl">⭐</div>
-          <div>
-            <span className="text-xs uppercase tracking-wider text-[#263c30]/60 block">Điểm tích lũy hiện tại</span>
-            <span className="text-3xl font-bold text-[#263c30]">
-              {balance ? balance.points.toLocaleString('vi-VN') : user?.loyaltyPoints ?? 0}
-            </span>
-            <span className="ml-1.5 text-sm font-medium text-[#263c30]/80">điểm</span>
+      <main className="mx-auto max-w-6xl space-y-8 px-6 py-10">
+        {error && (
+          <div
+            role="alert"
+            className="flex items-center justify-between rounded-2xl border border-[#e5b8b8] bg-[#fbeaea] p-4 text-sm text-[#9b2c2c]"
+          >
+            <span>{error}</span>
+            <button
+              type="button"
+              onClick={handleRefresh}
+              className="ml-4 font-bold underline hover:no-underline"
+            >
+              Thử lại
+            </button>
+          </div>
+        )}
+
+        {/* Summary Cards */}
+        <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+          <div className="rounded-2xl border border-[#e2d2b8] bg-[#efe5d4] p-3.5 shadow-xs">
+            <div className="flex items-center gap-5 rounded-xl bg-white p-6">
+              <div className="grid size-14 shrink-0 place-items-center rounded-full bg-[#6d4c3d] text-2xl text-white">
+                ★
+              </div>
+              <div>
+                <span className="block text-xs font-bold uppercase tracking-wider text-[#7a6254]">
+                  Điểm tích lũy hiện tại
+                </span>
+                <span className="text-3xl font-extrabold text-[#4a2e20]">
+                  {balance ? balance.points.toLocaleString('vi-VN') : (user?.loyaltyPoints ?? 0)}
+                </span>
+                <span className="ml-1.5 text-sm font-bold text-[#6d4c3d]">điểm</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-[#e2d2b8] bg-[#efe5d4] p-3.5 shadow-xs">
+            <div className="flex items-center gap-5 rounded-xl bg-white p-6">
+              <div className="grid size-14 shrink-0 place-items-center rounded-full bg-[#cbe8d3] text-2xl text-[#4a2e20]">
+                ☕
+              </div>
+              <div>
+                <span className="block text-xs font-bold uppercase tracking-wider text-[#7a6254]">
+                  Quy tắc cộng điểm
+                </span>
+                <p className="mt-0.5 text-base font-extrabold text-[#4a2e20]">
+                  1 điểm cho mỗi {formatVnd(balance?.earnRateVnd ?? 10000)}
+                </p>
+                <p className="mt-0.5 text-xs text-[#7a6254]">
+                  Tự động cộng khi đơn PAID và hoàn đảo nếu hủy trước pha chế
+                </p>
+              </div>
+            </div>
           </div>
         </div>
 
-        <div className="rounded-2xl border border-[#cdd5c8] bg-white p-6 shadow-sm flex items-center gap-5">
-          <div className="rounded-2xl bg-[#263c30]/10 text-[#263c30] p-4 text-2xl">☕</div>
-          <div>
-            <span className="text-xs uppercase tracking-wider text-[#263c30]/60 block">Quy tắc cộng điểm</span>
-            <p className="text-sm font-semibold text-[#263c30] mt-0.5">
-              1 điểm cho mỗi {(balance?.earnRateVnd ?? 10000).toLocaleString('vi-VN')} đ
-            </p>
-            <p className="text-xs text-[#263c30]/60 mt-0.5">
-              Tự động cộng sau khi thanh toán thành công
-            </p>
-          </div>
-        </div>
-      </div>
+        {/* Ledger History Table */}
+        <div className="rounded-2xl border border-[#e2d2b8] bg-[#efe5d4] p-4 shadow-xs">
+          <div className="space-y-4 rounded-xl bg-white p-6 sm:p-8">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-extrabold text-[#4a2e20]">Lịch sử biến động điểm</h2>
+              <span className="text-xs font-semibold text-[#7a6254]">
+                Sổ cái giao dịch (Ledger)
+              </span>
+            </div>
 
-      {/* Ledger History Table */}
-      <div className="rounded-2xl border border-[#cdd5c8] bg-white p-6 shadow-sm space-y-4">
-        <h2 className="text-lg font-bold text-[#263c30]">Lịch sử biến động điểm</h2>
+            {loading ? (
+              <div className="space-y-3">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="h-16 animate-pulse rounded-xl bg-[#faf6ec]" />
+                ))}
+              </div>
+            ) : entries.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-[#decbb4] bg-[#faf6ec] p-10 text-center text-sm text-[#7a6254]">
+                Chưa có giao dịch tích điểm nào được ghi nhận.
+              </div>
+            ) : (
+              <div className="divide-y divide-[#decbb4]/70">
+                {entries.map((entry) => {
+                  const formattedDate = new Date(entry.createdAt).toLocaleString('vi-VN', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    day: '2-digit',
+                    month: '2-digit',
+                    year: 'numeric',
+                  });
 
-        {loading ? (
-          <div className="space-y-3">
-            {[1, 2, 3].map((i) => (
-              <div key={i} className="animate-pulse h-16 rounded-xl bg-gray-100" />
-            ))}
-          </div>
-        ) : entries.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-[#cdd5c8] p-8 text-center text-sm text-[#263c30]/70">
-            Chưa có giao dịch tích điểm nào được ghi nhận.
-          </div>
-        ) : (
-          <div className="divide-y divide-gray-100">
-            {entries.map((entry) => {
-              const formattedDate = new Date(entry.createdAt).toLocaleString('vi-VN', {
-                hour: '2-digit',
-                minute: '2-digit',
-                day: '2-digit',
-                month: '2-digit',
-                year: 'numeric',
-              });
+                  const isEarn = entry.kind === 'EARN';
 
-              const isEarn = entry.kind === 'EARN';
+                  return (
+                    <div key={entry.id} className="flex items-center justify-between gap-4 py-4">
+                      <div className="space-y-1">
+                        <div className="flex flex-wrap items-center gap-2.5">
+                          <span
+                            className={`inline-flex items-center rounded-full border px-3 py-0.5 text-xs font-bold ${
+                              isEarn
+                                ? 'border-[#9ecfb0] bg-[#cbe8d3] text-[#2d6a4f]'
+                                : 'border-[#e5b8b8] bg-[#fbeaea] text-[#9b2c2c]'
+                            }`}
+                          >
+                            {isEarn ? 'Tích điểm đơn hàng' : 'Đảo điểm (Hủy đơn)'}
+                          </span>
+                          <Link
+                            href={`/orders/${entry.orderId}`}
+                            className="font-mono text-xs font-bold text-[#6d4c3d] underline underline-offset-4 hover:text-[#4a2e20]"
+                          >
+                            Chi tiết đơn →
+                          </Link>
+                        </div>
+                        <p className="text-xs text-[#7a6254]">{formattedDate}</p>
+                      </div>
 
-              return (
-                <div key={entry.id} className="py-3.5 flex items-center justify-between gap-4">
-                  <div className="space-y-0.5">
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={`inline-flex items-center rounded px-2 py-0.5 text-xs font-semibold ${
-                          isEarn
-                            ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
-                            : 'bg-red-50 text-red-800 border border-red-200'
-                        }`}
-                      >
-                        {isEarn ? 'Tích điểm đơn hàng' : 'Đảo điểm (Hủy đơn)'}
-                      </span>
-                      <Link
-                        href={`/orders/${entry.orderId}`}
-                        className="text-xs text-[#263c30]/70 hover:text-[#263c30] underline font-mono"
-                      >
-                        Chi tiết đơn
-                      </Link>
+                      <div className="text-right">
+                        <span
+                          className={`text-base font-extrabold ${
+                            isEarn ? 'text-[#2d6a4f]' : 'text-[#9b2c2c]'
+                          }`}
+                        >
+                          {entry.points > 0 ? `+${entry.points}` : entry.points}
+                        </span>
+                        <span className="ml-1 text-xs font-medium text-[#7a6254]">điểm</span>
+                      </div>
                     </div>
-                    <p className="text-xs text-[#263c30]/50">{formattedDate}</p>
-                  </div>
+                  );
+                })}
+              </div>
+            )}
 
-                  <div className="text-right">
-                    <span
-                      className={`text-base font-bold ${
-                        isEarn ? 'text-emerald-700' : 'text-red-600'
-                      }`}
-                    >
-                      {entry.points > 0 ? `+${entry.points}` : entry.points}
-                    </span>
-                    <span className="text-xs text-[#263c30]/60 ml-1">điểm</span>
-                  </div>
-                </div>
-              );
-            })}
+            {totalPages > 1 && (
+              <div className="flex items-center justify-between border-t border-[#decbb4]/70 pt-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLoading(true);
+                    setPage((p) => Math.max(1, p - 1));
+                  }}
+                  disabled={page <= 1}
+                  className="rounded-full border-2 border-[#6d4c3d] bg-white px-4 py-1.5 text-xs font-bold text-[#4a2e20] transition hover:bg-[#6d4c3d] hover:text-white disabled:opacity-40"
+                >
+                  ← Trang trước
+                </button>
+                <span className="text-xs font-bold text-[#7a6254]">
+                  Trang {page} / {totalPages} (Tổng {total} bản ghi)
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLoading(true);
+                    setPage((p) => Math.min(totalPages, p + 1));
+                  }}
+                  disabled={page >= totalPages}
+                  className="rounded-full border-2 border-[#6d4c3d] bg-white px-4 py-1.5 text-xs font-bold text-[#4a2e20] transition hover:bg-[#6d4c3d] hover:text-white disabled:opacity-40"
+                >
+                  Trang sau →
+                </button>
+              </div>
+            )}
           </div>
-        )}
-
-        {totalPages > 1 && (
-          <div className="flex items-center justify-between border-t border-gray-100 pt-4">
-            <button
-              onClick={() => {
-                setLoading(true);
-                setPage((p) => Math.max(1, p - 1));
-              }}
-              disabled={page <= 1}
-              className="rounded-lg border border-[#cdd5c8] bg-white px-3.5 py-1.5 text-xs font-semibold text-[#263c30] transition hover:bg-[#263c30] hover:text-white disabled:opacity-40"
-            >
-              ← Trang trước
-            </button>
-            <span className="text-xs text-[#263c30]/70">
-              Trang {page} / {totalPages} (Tổng {total} bản ghi)
-            </span>
-            <button
-              onClick={() => {
-                setLoading(true);
-                setPage((p) => Math.min(totalPages, p + 1));
-              }}
-              disabled={page >= totalPages}
-              className="rounded-lg border border-[#cdd5c8] bg-white px-3.5 py-1.5 text-xs font-semibold text-[#263c30] transition hover:bg-[#263c30] hover:text-white disabled:opacity-40"
-            >
-              Trang sau →
-            </button>
-          </div>
-        )}
-      </div>
-    </main>
+        </div>
+      </main>
+    </div>
   );
 }

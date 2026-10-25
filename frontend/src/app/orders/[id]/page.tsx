@@ -1,18 +1,20 @@
 'use client';
 
-import { use, useEffect, useState } from 'react';
+import { use, useEffect, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
-import { apiGet, ApiRequestError } from '@/lib/api';
+import { apiFetch, apiGet, ApiRequestError } from '@/lib/api';
+import { getAuthSnapshot, getAuthServerSnapshot, subscribeAuth } from '@/lib/auth';
 import type { Order, OrderStatus } from '@/lib/contracts/api.generated';
 import OrderStatusBadge from '@/components/OrderStatusBadge';
+import { formatVnd } from '@/lib/format';
 
 function StatusAlert({ status }: { status: OrderStatus }) {
   switch (status) {
     case 'PAID':
       return (
-        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
-          <p className="font-semibold">Thanh toán thành công!</p>
-          <p className="mt-0.5 text-xs text-emerald-700">
+        <div className="rounded-xl border border-[#b5dcc0] bg-[#cbe8d3]/75 p-4 text-sm text-[#2d6a4f]">
+          <p className="font-bold">Thanh toán thành công!</p>
+          <p className="mt-0.5 text-xs text-[#4a2e20]">
             Hệ thống đã xác nhận thanh toán. Đơn đang chờ bắt đầu pha chế.
           </p>
         </div>
@@ -20,16 +22,16 @@ function StatusAlert({ status }: { status: OrderStatus }) {
     case 'PENDING':
       return (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-          <p className="font-semibold">Đơn hàng đang chờ thanh toán</p>
+          <p className="font-bold">Đơn hàng đang chờ thanh toán</p>
           <p className="mt-0.5 text-xs text-amber-700">
-            Hàng trong kho đã được giữ tạm thời. Vui lòng hoàn tất thanh toán để baristar tiến hành pha chế.
+            Hàng trong kho đã được giữ tạm thời. Vui lòng hoàn tất thanh toán để barista tiến hành pha chế.
           </p>
         </div>
       );
     case 'PREPARING':
       return (
         <div className="rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
-          <p className="font-semibold">Đang pha chế</p>
+          <p className="font-bold">Đang pha chế</p>
           <p className="mt-0.5 text-xs text-blue-700">
             Barista đang chuẩn bị đồ uống tươi ngon cho bạn. Vui lòng chờ ít phút!
           </p>
@@ -38,7 +40,7 @@ function StatusAlert({ status }: { status: OrderStatus }) {
     case 'READY':
       return (
         <div className="rounded-xl border border-purple-200 bg-purple-50 p-4 text-sm text-purple-900">
-          <p className="font-semibold">Đồ uống đã sẵn sàng!</p>
+          <p className="font-bold">Đồ uống đã sẵn sàng!</p>
           <p className="mt-0.5 text-xs text-purple-700">
             Mời bạn xuất trình mã đơn hàng tại quầy để nhận đồ uống nhé.
           </p>
@@ -46,17 +48,17 @@ function StatusAlert({ status }: { status: OrderStatus }) {
       );
     case 'COMPLETED':
       return (
-        <div className="rounded-xl border border-zinc-300 bg-zinc-50 p-4 text-sm text-zinc-800">
-          <p className="font-semibold">Đơn hàng hoàn thành</p>
-          <p className="mt-0.5 text-xs text-zinc-600">
-            Cảm ơn bạn đã lựa chọn BrewLite! Chúc bạn thưởng thức đồ uống ngon miệng.
+        <div className="rounded-xl border border-[#e2d2b8] bg-[#efe5d4] p-4 text-sm text-[#4a2e20]">
+          <p className="font-bold">Đơn hàng hoàn thành</p>
+          <p className="mt-0.5 text-xs text-[#7a6254]">
+            Cảm ơn bạn đã lựa chọn BrewLite Mộc Vị! Chúc bạn thưởng thức đồ uống ngon miệng.
           </p>
         </div>
       );
     case 'PAYMENT_FAILED':
       return (
         <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">
-          <p className="font-semibold">Thanh toán không thành công</p>
+          <p className="font-bold">Thanh toán không thành công</p>
           <p className="mt-0.5 text-xs text-red-700">
             Giao dịch thanh toán chưa thể hoàn tất. Bạn có thể thử lại với phương thức thanh toán khác.
           </p>
@@ -65,7 +67,7 @@ function StatusAlert({ status }: { status: OrderStatus }) {
     case 'CANCELLED':
       return (
         <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 text-sm text-gray-700">
-          <p className="font-semibold">Đơn hàng đã bị hủy</p>
+          <p className="font-bold">Đơn hàng đã bị hủy</p>
           <p className="mt-0.5 text-xs text-gray-500">
             Đơn hàng đã được ghi nhận hủy và hoàn trả các khuyến mãi/tồn kho liên quan.
           </p>
@@ -74,11 +76,20 @@ function StatusAlert({ status }: { status: OrderStatus }) {
   }
 }
 
+const NEXT_STAFF_STATUS: Partial<Record<OrderStatus, { next: 'PREPARING' | 'READY' | 'COMPLETED'; label: string }>> = {
+  PAID: { next: 'PREPARING', label: 'Bắt đầu pha chế (PREPARING)' },
+  PREPARING: { next: 'READY', label: 'Báo món sẵn sàng (READY)' },
+  READY: { next: 'COMPLETED', label: 'Giao món & Hoàn tất (COMPLETED)' },
+};
+
 export default function OrderDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+  const user = useSyncExternalStore(subscribeAuth, getAuthSnapshot, getAuthServerSnapshot);
   const [order, setOrder] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionBusy, setActionBusy] = useState(false);
   const [refreshToken, setRefreshToken] = useState(0);
 
   useEffect(() => {
@@ -118,16 +129,34 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
 
   function handleRefresh() {
     setLoading(true);
+    setActionError(null);
     setRefreshToken((t) => t + 1);
+  }
+
+  async function handleStaffTransition(nextStatus: 'PREPARING' | 'READY' | 'COMPLETED') {
+    if (!order || actionBusy) return;
+    setActionBusy(true);
+    setActionError(null);
+    try {
+      const updated = await apiFetch<Order>(`/orders/${order.id}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify({ expectedVersion: order.version, status: nextStatus }),
+      });
+      setOrder(updated);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Không thể cập nhật trạng thái đơn.');
+    } finally {
+      setActionBusy(false);
+    }
   }
 
   if (loading) {
     return (
-      <main className="mx-auto max-w-3xl px-6 py-12">
+      <main className="mx-auto max-w-6xl px-6 py-10">
         <div className="animate-pulse space-y-6">
-          <div className="h-8 w-48 rounded bg-gray-200" />
-          <div className="h-24 rounded-2xl bg-gray-200" />
-          <div className="h-64 rounded-2xl bg-gray-200" />
+          <div className="h-6 w-48 rounded bg-[#decbb4]" />
+          <div className="h-32 rounded-2xl border border-[#e2d2b8] bg-[#efe5d4]" />
+          <div className="h-64 rounded-2xl border border-[#e2d2b8] bg-[#efe5d4]" />
         </div>
       </main>
     );
@@ -135,20 +164,21 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
 
   if (error || !order) {
     return (
-      <main className="mx-auto max-w-3xl px-6 py-16 text-center">
-        <div className="rounded-2xl border border-red-200 bg-red-50 p-8">
-          <h2 className="text-lg font-bold text-red-800">Không thể xem đơn hàng</h2>
-          <p className="mt-2 text-sm text-red-600">{error ?? 'Đơn hàng không tồn tại'}</p>
-          <div className="mt-6 flex justify-center gap-4">
+      <main className="mx-auto max-w-6xl px-6 py-12 text-center">
+        <div className="mx-auto max-w-lg rounded-2xl border border-[#e5b8b8] bg-[#fbeaea] p-8">
+          <h2 className="text-lg font-bold text-[#9b2c2c]">Không thể xem đơn hàng</h2>
+          <p className="mt-2 text-sm text-[#9b2c2c]/90">{error ?? 'Đơn hàng không tồn tại'}</p>
+          <div className="mt-6 flex justify-center gap-3">
             <button
+              type="button"
               onClick={handleRefresh}
-              className="rounded-lg border border-red-300 bg-white px-4 py-2 text-xs font-semibold text-red-800 transition hover:bg-red-100"
+              className="rounded-full border border-[#e5b8b8] bg-white px-5 py-2 text-xs font-bold text-[#9b2c2c] transition hover:bg-[#fbeaea]"
             >
               Thử lại
             </button>
             <Link
               href="/orders"
-              className="rounded-lg bg-[#263c30] px-4 py-2 text-xs font-semibold text-white transition hover:bg-[#1f3026]"
+              className="rounded-full bg-[#6d4c3d] px-5 py-2 text-xs font-bold text-white transition hover:bg-[#563a2d]"
             >
               ← Về danh sách đơn
             </Link>
@@ -166,108 +196,159 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
     year: 'numeric',
   });
 
+  const staffTransition = user?.role === 'STAFF' ? NEXT_STAFF_STATUS[order.status] : undefined;
+
   return (
-    <main className="mx-auto max-w-3xl px-6 py-10">
-      <div className="mb-6 flex items-center justify-between">
-        <Link
-          href="/orders"
-          className="text-xs font-semibold uppercase tracking-wider text-[#263c30]/70 hover:text-[#263c30]"
-        >
-          ← Quay lại danh sách
-        </Link>
-        <button
-          onClick={handleRefresh}
-          className="rounded-lg border border-[#cdd5c8] bg-white px-3 py-1.5 text-xs font-semibold text-[#263c30] shadow-sm transition hover:bg-[#263c30] hover:text-white"
-        >
-          ↻ Tải lại
-        </button>
-      </div>
-
-      <div className="rounded-2xl border border-[#cdd5c8] bg-white p-6 sm:p-8 shadow-sm space-y-6">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-[#cdd5c8] pb-6">
-          <div>
-            <div className="flex items-center gap-3">
-              <h1 className="font-mono text-2xl font-bold text-[#263c30]">{order.code}</h1>
-              <OrderStatusBadge status={order.status} />
-            </div>
-            <p className="mt-1 text-xs text-[#263c30]/60">Thời gian đặt: {formattedDate}</p>
-          </div>
-
-          <div className="text-right sm:text-right">
-            <span className="text-xs uppercase tracking-wider text-[#263c30]/60 block">Tổng thanh toán</span>
-            <span className="text-2xl font-bold text-[#263c30]">
-              {order.total.toLocaleString('vi-VN')} {order.currency}
-            </span>
-          </div>
-        </div>
-
-        <StatusAlert status={order.status} />
-        {['PENDING', 'PAYMENT_FAILED', 'PAID'].includes(order.status) && (
-          <Link href={`/checkout?orderId=${order.id}`} className="mt-4 inline-block rounded-lg bg-[#263c30] px-4 py-3 text-sm font-semibold text-white">
-            {order.status === 'PAID' ? 'Quản lý thanh toán / hủy trước pha chế' : 'Tiếp tục thanh toán / hủy đơn'}
+    <div>
+      <div className="border-b border-[#b5dcc0] bg-[#cbe8d3]/75">
+        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-3.5 text-xs font-bold">
+          <Link
+            href="/orders"
+            className="text-[#4a2e20] transition hover:text-[#6d4c3d]"
+          >
+            ← Quay lại danh sách đơn
           </Link>
-        )}
-
-        <div>
-          <h2 className="text-base font-bold text-[#263c30] mb-4">Các món đã đặt (Snapshot)</h2>
-          <div className="divide-y divide-gray-100 rounded-xl border border-gray-100 bg-gray-50/50">
-            {order.items.map((item) => (
-              <div key={item.id} className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2">
-                    <span className="font-semibold text-sm text-[#263c30]">{item.productName}</span>
-                    <span className="rounded bg-black/5 px-1.5 py-0.5 text-[11px] font-medium text-[#263c30]">
-                      Size {item.size} ({item.sizePrice.toLocaleString('vi-VN')} đ)
-                    </span>
-                  </div>
-
-                  {item.toppings && item.toppings.length > 0 && (
-                    <div className="text-xs text-[#263c30]/70 flex flex-wrap gap-1.5">
-                      <span>Topping:</span>
-                      {item.toppings.map((t) => (
-                        <span key={t.id} className="rounded bg-white border border-gray-200 px-1.5 py-0.5">
-                          {t.name} (+{t.price.toLocaleString('vi-VN')} đ)
-                        </span>
-                      ))}
-                    </div>
-                  )}
-
-                  <div className="text-xs text-[#263c30]/60">
-                    {item.unitPrice.toLocaleString('vi-VN')} đ × {item.qty} ly
-                  </div>
-                </div>
-
-                <div className="text-right font-semibold text-sm text-[#263c30] self-end sm:self-center">
-                  {item.lineTotal.toLocaleString('vi-VN')} đ
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="border-t border-[#cdd5c8] pt-6 space-y-2">
-          <div className="flex justify-between text-sm text-[#263c30]/80">
-            <span>Tạm tính</span>
-            <span>{order.subtotal.toLocaleString('vi-VN')} đ</span>
-          </div>
-
-          {order.discount > 0 && (
-            <div className="flex justify-between text-sm text-emerald-700">
-              <span>
-                Giảm giá {order.promotionCode ? `(${order.promotionCode})` : ''}
-              </span>
-              <span>-{order.discount.toLocaleString('vi-VN')} đ</span>
-            </div>
-          )}
-
-          <div className="flex justify-between text-base font-bold text-[#263c30] border-t border-dashed border-gray-200 pt-3">
-            <span>Tổng cộng</span>
-            <span className="text-lg">
-              {order.total.toLocaleString('vi-VN')} {order.currency}
-            </span>
-          </div>
+          <button
+            type="button"
+            onClick={handleRefresh}
+            className="rounded-full bg-[#6d4c3d] px-4 py-1.5 text-white transition hover:bg-[#563a2d]"
+          >
+            ↻ Tải lại
+          </button>
         </div>
       </div>
-    </main>
+
+      <main className="mx-auto max-w-6xl px-6 py-10">
+        <div className="rounded-2xl border border-[#e2d2b8] bg-[#efe5d4] p-4 shadow-xs sm:p-5">
+          <div className="space-y-6 rounded-xl bg-white p-6 sm:p-8">
+            <div className="flex flex-col gap-4 border-b border-[#decbb4] pb-6 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="eyebrow">BrewLite Mộc Vị / Chi tiết đơn hàng</p>
+                <div className="mt-1.5 flex flex-wrap items-center gap-3">
+                  <h1 className="font-mono text-2xl font-extrabold text-[#4a2e20]">{order.code}</h1>
+                  <OrderStatusBadge status={order.status} />
+                </div>
+                <p className="mt-1.5 text-xs text-[#7a6254]">
+                  Thời gian đặt: {formattedDate} · Giữ kho: <strong>{order.reservationStatus}</strong> · Phiên bản v{order.version}
+                </p>
+              </div>
+
+              <div className="sm:text-right">
+                <span className="block text-xs font-bold uppercase tracking-wider text-[#7a6254]">
+                  Tổng thanh toán
+                </span>
+                <span className="text-2xl font-extrabold text-[#6d4c3d]">
+                  {formatVnd(order.total)}
+                </span>
+              </div>
+            </div>
+
+            <StatusAlert status={order.status} />
+
+            {actionError && (
+              <div
+                role="alert"
+                className="rounded-xl border border-[#e5b8b8] bg-[#fbeaea] p-3.5 text-xs font-bold text-[#9b2c2c]"
+              >
+                {actionError}
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center gap-3">
+              {['PENDING', 'PAYMENT_FAILED', 'PAID'].includes(order.status) && (
+                <Link
+                  href={`/checkout?orderId=${order.id}`}
+                  className="inline-flex items-center gap-2 rounded-full bg-[#6d4c3d] px-6 py-3 text-xs font-bold text-white shadow-xs transition hover:bg-[#563a2d]"
+                >
+                  <span>
+                    {order.status === 'PAID'
+                      ? 'Quản lý thanh toán / hủy trước pha chế'
+                      : 'Tiếp tục thanh toán / hủy đơn'}
+                  </span>
+                  <span aria-hidden="true">→</span>
+                </Link>
+              )}
+
+              {staffTransition && (
+                <button
+                  type="button"
+                  disabled={actionBusy}
+                  onClick={() => handleStaffTransition(staffTransition.next)}
+                  className="inline-flex items-center gap-2 rounded-full border-2 border-[#6d4c3d] bg-[#cbe8d3] px-5 py-2.5 text-xs font-bold text-[#4a2e20] transition hover:bg-[#6d4c3d] hover:text-white disabled:opacity-50"
+                >
+                  <span>[STAFF] {staffTransition.label}</span>
+                </button>
+              )}
+            </div>
+
+            <div>
+              <h2 className="mb-3 text-base font-extrabold text-[#4a2e20]">
+                Các món đã đặt (Snapshot)
+              </h2>
+              <div className="divide-y divide-[#decbb4]/70 rounded-2xl border border-[#e2d2b8] bg-[#faf6ec]">
+                {order.items.map((item) => (
+                  <div
+                    key={item.id}
+                    className="flex flex-col justify-between gap-3 p-4 sm:flex-row sm:items-center"
+                  >
+                    <div className="space-y-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm font-extrabold text-[#4a2e20]">
+                          {item.productName}
+                        </span>
+                        <span className="rounded-full bg-[#cbe8d3] px-2.5 py-0.5 text-[11px] font-bold text-[#2d6a4f]">
+                          Size {item.size} ({formatVnd(item.sizePrice)})
+                        </span>
+                      </div>
+
+                      {item.toppings && item.toppings.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-1.5 text-xs text-[#7a6254]">
+                          <span>Topping:</span>
+                          {item.toppings.map((t) => (
+                            <span
+                              key={t.id}
+                              className="rounded-md border border-[#decbb4] bg-white px-2 py-0.5 font-medium text-[#4a2e20]"
+                            >
+                              {t.name} (+{formatVnd(t.price)})
+                            </span>
+                          ))}
+                        </div>
+                      )}
+
+                      <div className="text-xs text-[#7a6254]">
+                        {formatVnd(item.unitPrice)} × {item.qty} ly
+                      </div>
+                    </div>
+
+                    <div className="self-end text-right text-sm font-extrabold text-[#6d4c3d] sm:self-center">
+                      {formatVnd(item.lineTotal)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-2.5 border-t border-[#decbb4] pt-6">
+              <div className="flex justify-between text-sm text-[#7a6254]">
+                <span>Tạm tính</span>
+                <span className="font-bold text-[#4a2e20]">{formatVnd(order.subtotal)}</span>
+              </div>
+
+              {order.discount > 0 && (
+                <div className="flex justify-between text-sm font-bold text-[#2d6a4f]">
+                  <span>Giảm giá {order.promotionCode ? `(${order.promotionCode})` : ''}</span>
+                  <span>−{formatVnd(order.discount)}</span>
+                </div>
+              )}
+
+              <div className="flex justify-between border-t border-dashed border-[#decbb4] pt-3 text-base font-extrabold text-[#4a2e20]">
+                <span>Tổng cộng</span>
+                <span className="text-xl text-[#6d4c3d]">{formatVnd(order.total)}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
   );
 }

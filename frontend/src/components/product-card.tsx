@@ -7,23 +7,48 @@ export function ProductCard({ product }: { product: ProductSummary }) {
   const soldOut = product.stock <= 0;
 
   return (
-    <article className="flex w-full flex-col overflow-hidden rounded-2xl border border-brew-line bg-white/60">
+    <article className="flex w-full flex-col overflow-hidden rounded-2xl border border-[#e2d2b8] bg-[#efe5d4] p-3.5 shadow-xs transition duration-200 hover:-translate-y-1 hover:border-[#6d4c3d] hover:shadow-md">
       <Link
         href={`/products/${product.id}`}
-        className="group flex flex-1 flex-col focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brew-ink"
+        className="group flex flex-1 flex-col focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#6d4c3d]"
       >
-        <ProductImage src={product.imageUrl} alt={product.name} className="aspect-[4/3] w-full" />
-        <div className="flex flex-1 flex-col gap-1 p-4">
-          <h2 className="text-lg font-semibold group-hover:underline">{product.name}</h2>
-          <p className="line-clamp-2 text-sm text-brew-muted">{product.description}</p>
-          <div className="mt-auto flex items-center justify-between pt-3">
-            <p className="font-semibold">
-              <span className="mr-1 text-xs font-normal text-brew-muted">Từ</span>
-              {formatVnd(product.price)}
-            </p>
-            {soldOut && (
-              <span className="rounded-full bg-brew-danger-bg px-3 py-1 text-xs font-semibold text-brew-danger">Hết hàng</span>
+        <div className="relative overflow-hidden rounded-xl bg-white shadow-2xs">
+          <ProductImage
+            src={product.imageUrl}
+            alt={product.name}
+            className="aspect-square w-full transition duration-300 group-hover:scale-105"
+          />
+          <div className="absolute top-2.5 right-2.5">
+            {soldOut ? (
+              <span className="rounded-full border border-[#e5b8b8] bg-[#fbeaea] px-2.5 py-1 text-[11px] font-bold text-[#9b2c2c] shadow-xs">
+                Hết hàng
+              </span>
+            ) : (
+              <span className="rounded-full bg-[#6d4c3d]/90 px-2.5 py-0.5 text-[11px] font-bold text-white backdrop-blur-xs">
+                {formatVnd(product.price)}
+              </span>
             )}
+          </div>
+        </div>
+
+        <div className="flex flex-1 flex-col items-center justify-between px-2 pt-3.5 pb-1 text-center">
+          <div>
+            <h3 className="text-base font-extrabold text-[#4a2e20] transition group-hover:text-[#6d4c3d]">
+              {product.name}
+            </h3>
+            <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-[#7a6254]">
+              {product.description}
+            </p>
+          </div>
+
+          <div className="mt-3 flex w-full items-center justify-center gap-2 border-t border-[#decbb4]/80 pt-2.5">
+            <span className="text-xs font-bold text-[#6d4c3d]">
+              Từ {formatVnd(product.price)}
+            </span>
+            <span className="text-xs text-[#decbb4]">•</span>
+            <span className="text-xs font-semibold text-[#4a2e20] group-hover:underline">
+              {soldOut ? 'Chi tiết' : 'Đặt món →'}
+            </span>
           </div>
         </div>
       </Link>
