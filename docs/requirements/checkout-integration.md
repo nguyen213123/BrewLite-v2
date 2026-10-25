@@ -24,6 +24,10 @@ Phạm vi: API PostgreSQL thật, gateway thanh toán mô phỏng WALLET/CARD. G
 9. Intent theo userId; logout/đổi token/unmount ngăn phản hồi cũ tác động giỏ. Mỗi session chỉ có một intent hoạt động; bắt đầu đơn mới sau khi đơn cũ kết thúc/hủy hoặc yêu cầu tạo đơn bị từ chối chắc chắn.
 10. Chi tiết đơn có liên kết tiếp tục thanh toán/hủy. `/checkout?orderId=...` xác minh quyền qua API; nếu đã mất snapshot giỏ ban đầu thì giữ giỏ hiện tại, không suy đoán dòng đã mua bằng product key. Không thay thế một intent PENDING/FAILED đang mở bằng đơn khác từ lịch sử.
 
+11. Tổng khác quote (Issue #13): checkout lưu `quotedTotal` cùng intent. Nếu tổng của đơn vừa tạo khác tổng đã báo giá, UI hiển thị chênh lệch và khóa nút thanh toán cho đến khi người dùng bấm xác nhận tổng mới (hoặc hủy đơn). Xác nhận được lưu qua reload; replay payment đã lưu không bị chặn lại. Đơn mở từ lịch sử không có quote nên không áp dụng.
+12. Lỗi hiển thị cho người dùng (`lib/checkout/errors.ts`): hết hàng/xung đột kho, lựa chọn hoặc sản phẩm không còn hợp lệ, mã sai/hết hạn/hết lượt, đơn đổi trạng thái, phiên hết hạn và lỗi mạng/timeout. Lỗi mạng luôn là kết quả chưa xác nhận, không bao giờ hiển thị như thành công.
+13. Sau thanh toán thành công, UI hiển thị điểm tích lũy lấy từ `/loyalty/me` (không tự cộng ở client). MVP không dùng điểm để giảm tiền.
+
 ## Kiểm tra thủ công
 
 - Đăng ký/đăng nhập → menu → Cappuccino M, Kem, qty 2 → cart → quote SAVE10 → 108.000đ → tạo đơn → SUCCESS → PAID, cart trừ 2, số dư tăng 10, lịch sử có đơn.
@@ -31,6 +35,8 @@ Phạm vi: API PostgreSQL thật, gateway thanh toán mô phỏng WALLET/CARD. G
 - Reload sau khi tạo đơn hoặc sau thanh toán → khôi phục đúng đơn, GET xác minh; không tạo đơn/thanh toán hay trừ giỏ lần nữa.
 - Hủy PENDING/FAILED/PAID → kiểm tra giỏ, stock/promo/điểm; hủy lặp không hoàn lần hai.
 - Mã sai/hết hạn, size/topping sai, sản phẩm ngừng bán, giỏ rỗng, thiếu kho, token hết hạn phải báo lỗi.
+- Đổi giá giữa quote và tạo đơn (ví dụ admin sửa giá hoặc mã hết hạn sau khi quote) → xuất hiện khối “Tổng tiền đã thay đổi”, nút thanh toán bị khóa tới khi xác nhận tổng mới.
+- Sản phẩm Caramel Macchiato (stock 0 trong seed) → báo hết hàng, giỏ giữ nguyên. Kiểm tra giao diện ở màn hình hẹp (≤ 640px): nút/ô nhập đủ lớn, không tràn ngang.
 - Ngắt mạng lúc POST/GET → giữ giỏ, xác minh lại, chỉ gửi lại cùng attempt khi chưa xác nhận FAIL.
 
 ## Kiểm thử tự động

@@ -32,6 +32,7 @@ it('restores CARD/FAIL controls from the saved attempt instead of displaying WAL
       if (id === '@/lib/cart/cart-store') return { useCartHydrated: () => true,
         useCartStore: (selector: (state: { lines: [] }) => unknown) => selector({ lines: [] }), toCartItems: () => [] };
       if (id === '@/lib/checkout/session') return { createCheckoutSession, createCheckoutLifecycle, paidStatuses };
+      if (id === '@/lib/checkout/errors') return { describeCheckoutError: (e: unknown) => ({ message: String(e) }), comparePrice: () => ({ changed: false, orderTotal: 0, difference: 0 }) };
       if (id === '@/lib/api') return {};
       if (id === '@/components/payments/payment-api') return { formatVnd: (amount: number) => `${amount} VND` };
       throw new Error(`Unexpected module: ${id}`);

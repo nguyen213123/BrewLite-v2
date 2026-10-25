@@ -146,3 +146,57 @@ it('a foreign or missing historical order does not replace the current intent', 
   await assert.rejects(session.resume('foreign-order'));
   assert.equal(session.snapshot().orderId, undefined);
 });
+it('requires explicit confirmation before paying when the created total differs from the quote', async () => {
+  const h = setup(), session = h.make();
+  await session.create(request, purchased, 100000); // quote 100.000đ nhưng đơn thật 120.000đ
+  assert.equal(session.needsPriceConfirmation(), true);
+  await assert.rejects(session.pay('WALLET', 'SUCCESS'), /xác nhận tổng mới/);
+  assert.equal(h.pays.length, 0);
+  session.acknowledgePrice();
+  assert.equal(session.needsPriceConfirmation(), false);
+  h.status('PAID'); await session.pay('WALLET', 'SUCCESS');
+  assert.equal(h.pays.length, 1); assert.equal(h.settled.length, 1);
+});
+it('does not ask for confirmation when the order total equals the quote', async () => {
+  const h = setup(), session = h.make();
+  await session.create(request, purchased, pending.total);
+  assert.equal(session.needsPriceConfirmation(), false);
+  await session.pay('WALLET', 'SUCCESS'); assert.equal(h.pays.length, 1);
+});
+it('keeps the price confirmation after reload and replay uses the same order', async () => {
+  const h = setup(); const first = h.make();
+  await first.create(request, purchased, 90000);
+  const reloaded = h.make(); await reloaded.verify();
+  assert.equal(reloaded.snapshot().quotedTotal, 90000);
+  assert.equal(reloaded.needsPriceConfirmation(), true);
+  await assert.rejects(reloaded.pay('CARD', 'SUCCESS'));
+  reloaded.acknowledgePrice();
+  assert.equal(h.make().needsPriceConfirmation(), false); // xác nhận cũng được lưu qua reload
+  assert.equal(h.creates.length, 1);
+});
+it('cannot acknowledge a price before the order state is verified', async () => {
+  const h = setup(), session = h.make();
+  assert.throws(() => session.acknowledgePrice());
+  h.deps.find = async () => { throw new Error('GET timeout'); };
+  await assert.rejects(session.create(request, purchased, 90000));
+  assert.throws(() => session.acknowledgePrice(), /xác minh/);
+});
+it('API 501 on create never fabricates an order and keeps the cart', async () => {
+  const h = setup(), session = h.make();
+  h.deps.create = async () => { throw Object.assign(new Error('Chưa triển khai'), { statusCode: 501, code: 'FEATURE_NOT_IMPLEMENTED' }); };
+  await assert.rejects(session.create(request, purchased, 120000), /Chưa triển khai/);
+  const s = session.snapshot();
+  assert.equal(s.orderId, undefined); assert.equal(s.order, undefined); assert.equal(h.settled.length, 0);
+});
+it('API 501 on payment never reports PAID or clears the cart, even for a SUCCESS scenario', async () => {
+  const h = setup(), session = h.make(); await session.create(request, purchased, 120000);
+  h.deps.pay = async () => { throw Object.assign(new Error('Chưa triển khai'), { statusCode: 501, code: 'FEATURE_NOT_IMPLEMENTED' }); };
+  await assert.rejects(session.pay('WALLET', 'SUCCESS'));
+  assert.equal(session.snapshot().order?.status, 'PENDING'); assert.equal(h.settled.length, 0);
+});
+it('going back after a price change cannot skip confirmation, even from a fresh session instance', async () => {
+  const h = setup(); await h.make().create(request, purchased, 90000); // quote 90.000đ, đơn 120.000đ
+  const afterBack = h.make(); await afterBack.verify();
+  await assert.rejects(afterBack.pay('WALLET', 'SUCCESS'), /xác nhận tổng mới/);
+  assert.equal(h.pays.length, 0);
+});

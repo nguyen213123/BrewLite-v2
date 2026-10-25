@@ -7,6 +7,7 @@ import { apiGet, apiPost } from '@/lib/api';
 import { getToken, getUser, getAuthSnapshot, getAuthServerSnapshot, subscribeAuth, updateUserPoints } from '@/lib/auth';
 import { useCartStore, useCartHydrated, toCartItems } from '@/lib/cart/cart-store';
 import { createCheckoutSession, createCheckoutLifecycle, paidStatuses } from '@/lib/checkout/session';
+import { describeCheckoutError, comparePrice } from '@/lib/checkout/errors';
 import type { Order, PaymentMethod, Quote, User } from '@/lib/contracts/api.generated';
 import { formatVnd } from '@/components/payments/payment-api';
 
@@ -52,6 +53,9 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
     ? state.attempt : undefined;
   const paid = state.verified && order && paidStatuses.includes(order.status);
   const terminal = state.verified && order && (paid || order.status === 'CANCELLED');
+  // Tổng của đơn đã tạo khác tổng đã báo giá: người dùng phải xác nhận trước khi thanh toán.
+  const priceCheck = comparePrice(state.quotedTotal, order?.total ?? 0);
+  const needsPriceConfirm = Boolean(state.verified && order?.status === 'PENDING' && priceCheck.changed && !state.priceAcknowledged);
 
   useEffect(() => {
     lifecycle.setActive(true);
@@ -76,7 +80,7 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
         } catch { setNotice('Đơn đã được xử lý. Chưa tải được điểm mới; xem lại tại trang Điểm thưởng.'); }
       }
     } catch (e) {
-      if (lifecycle.isActive()) setError(e instanceof Error ? e.message : 'Không thể xử lý yêu cầu. Hãy thử lại.');
+      if (lifecycle.isActive()) setError(describeCheckoutError(e).message);
     } finally { lifecycle.release(); if (lifecycle.isActive()) { setState(session.snapshot()); setBusy(false); } }
   }
 
@@ -95,7 +99,7 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
         })}>Tính giá từ hệ thống</button>
         {currentQuote && <><p>Tạm tính: {formatVnd(currentQuote.subtotal)} · Giảm: {formatVnd(currentQuote.discount)}</p>
           <p><strong>Tổng: {formatVnd(currentQuote.total)}</strong></p>
-          <button disabled={busy} onClick={() => run(() => session.create(request, lines.map(l => ({ id: l.id, key: l.key, qty: l.qty }))))}>Tạo đơn và giữ hàng</button></>}
+          <button disabled={busy} onClick={() => run(() => session.create(request, lines.map(l => ({ id: l.id, key: l.key, qty: l.qty })), currentQuote.total))}>Tạo đơn và giữ hàng</button></>}
       </>}
     </section> : <>
       {order && <section className="shop-panel"><h2>Đơn {order.code}</h2>
@@ -107,6 +111,11 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
       </section>}
       {!order && !state.orderId && state.request && <button disabled={busy} onClick={() => run(() => session.create(state.request!, state.purchased))}>Khôi phục yêu cầu tạo đơn</button>}
       {state.orderId && <button disabled={busy} onClick={() => run(() => session.verify())}>Xác minh lại trạng thái đơn</button>}
+      {needsPriceConfirm && order && <section className="shop-panel shop-error" role="alert"><h2>Tổng tiền đã thay đổi</h2>
+        <p>Giá đã báo trước đó là {formatVnd(priceCheck.quotedTotal ?? 0)} nhưng đơn vừa tạo có tổng {formatVnd(order.total)} ({priceCheck.difference > 0 ? 'tăng' : 'giảm'} {formatVnd(Math.abs(priceCheck.difference))}). Giá, khuyến mãi hoặc lựa chọn có thể đã thay đổi trên hệ thống.</p>
+        <p>Hãy kiểm tra các dòng bên trên. Bạn chỉ có thể thanh toán sau khi xác nhận tổng mới, hoặc hủy đơn để trả lại hàng đã giữ.</p>
+        <button disabled={busy} onClick={() => { try { session.acknowledgePrice(); setState(session.snapshot()); } catch (e) { setError(describeCheckoutError(e).message); } }}>Tôi đồng ý với tổng {formatVnd(order.total)}</button>
+      </section>}
       {order && !terminal && <section className="shop-panel"><h2>Thanh toán mô phỏng</h2>
         {state.attempt && <p>Lần thanh toán hiện tại được lưu để thử lại an toàn sau lỗi mạng.</p>}
         <label>Phương thức <select value={replayAttempt?.request.method ?? method} disabled={busy || Boolean(replayAttempt)} onChange={e => setMethod(e.target.value as PaymentMethod)}><option value="WALLET">Ví điện tử</option><option value="CARD">Thẻ ngân hàng</option></select></label>
@@ -114,13 +123,13 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
         {order.status === 'PAYMENT_FAILED' && state.verified ? <>
           <p>Thanh toán thất bại. Giỏ hàng được giữ; kho và lượt khuyến mãi đã trả lại.</p>
           <button disabled={busy} onClick={() => run(() => session.pay(method, outcome, true))}>Thử lại thanh toán bằng khóa mới</button>
-        </> : <button disabled={busy || !state.verified} onClick={() => run(() => session.pay(method, outcome))}>{state.attempt ? 'Gửi lại cùng lần thanh toán' : 'Xác nhận thanh toán'}</button>}
+        </> : <button disabled={busy || !state.verified || needsPriceConfirm} onClick={() => run(() => session.pay(method, outcome))}>{state.attempt ? 'Gửi lại cùng lần thanh toán' : 'Xác nhận thanh toán'}</button>}
       </section>}
       {order && ['PENDING', 'PAYMENT_FAILED', 'PAID'].includes(order.status) && <button disabled={busy || !state.verified} onClick={() => run(async () => {
         await apiPost<Order>(`/orders/${order.id}/cancel`, { expectedVersion: order.version });
         await session.verify();
       })}>{order.status === 'PAID' ? 'Hủy đơn và hoàn thanh toán mô phỏng' : 'Hủy đơn và trả hàng đã giữ'}</button>}
-      {paid && <section className="shop-panel" role="status"><h2>Thanh toán thành công</h2><p>{state.purchased.length ? 'Đã xác minh đơn từ hệ thống. Các món đã mua đã được trừ khỏi giỏ; món thêm sau vẫn được giữ.' : 'Đã xác minh đơn từ hệ thống. Giỏ hiện tại được giữ nguyên vì không có snapshot giỏ của đơn khôi phục từ lịch sử.'}</p><Link href="/loyalty">Xem điểm thưởng</Link></section>}
+      {paid && <section className="shop-panel" role="status"><h2>Thanh toán thành công</h2><p>{state.purchased.length ? 'Đã xác minh đơn từ hệ thống. Các món đã mua đã được trừ khỏi giỏ; món thêm sau vẫn được giữ.' : 'Đã xác minh đơn từ hệ thống. Giỏ hiện tại được giữ nguyên vì không có snapshot giỏ của đơn khôi phục từ lịch sử.'}</p><p>Điểm tích lũy hiện tại (từ hệ thống): <strong>{user.loyaltyPoints}</strong></p><Link href="/loyalty">Xem điểm thưởng</Link></section>}
       {(terminal || !state.orderId && !state.createUncertain) && <button disabled={busy} onClick={() => { try { session.startOver(); setState(session.snapshot()); setQuote(undefined); if (initialOrderId) router.replace('/checkout'); } catch(e) { setError((e as Error).message); } }}>Bắt đầu đơn mới</button>}
     </>}
     {busy && <p role="status">Đang xử lý, vui lòng chờ…</p>}

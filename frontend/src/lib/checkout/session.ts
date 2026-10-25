@@ -17,6 +17,10 @@ export type CheckoutState = {
   purchased: PurchasedLine[];
   createKey?: string;
   createUncertain?: boolean;
+  /** Tổng backend đã báo giá (quote) cho người dùng trước khi tạo đơn. */
+  quotedTotal?: number;
+  /** Người dùng đã xác nhận tổng khác quote của đơn đã tạo. */
+  priceAcknowledged?: boolean;
   orderId?: string;
   order?: Order;
   attempt?: { key: string; request: PaymentRequest };
@@ -43,6 +47,9 @@ export function createCheckoutSession(userId: string, deps: CheckoutDependencies
   let busy = false;
   let verified = false;
   const save = () => deps.write(JSON.stringify(state));
+  const priceNeedsConfirmation = () => Boolean(
+    state.order && typeof state.quotedTotal === 'number' && !state.priceAcknowledged &&
+    state.order.total !== state.quotedTotal && state.order.status === 'PENDING');
   async function exclusive<T>(work: () => Promise<T>): Promise<T> {
     if (!deps.active()) throw new Error('Phiên đăng nhập đã thay đổi. Vui lòng đăng nhập lại.');
     if (busy) throw new Error('Yêu cầu đang xử lý.');
@@ -81,10 +88,10 @@ export function createCheckoutSession(userId: string, deps: CheckoutDependencies
       return refresh();
     }),
     quote: (request: OrderRequest) => exclusive(() => deps.quote(request)),
-    create: (request: OrderRequest, purchased: PurchasedLine[]) => exclusive(async () => {
+    create: (request: OrderRequest, purchased: PurchasedLine[], quotedTotal?: number) => exclusive(async () => {
       if (!state.request) {
         state = { userId, request: structuredClone(request), purchased: structuredClone(purchased),
-          createKey: deps.key(), createUncertain: false };
+          createKey: deps.key(), createUncertain: false, quotedTotal, priceAcknowledged: false };
         save();
       }
       if (!state.orderId) {
@@ -115,12 +122,24 @@ export function createCheckoutSession(userId: string, deps: CheckoutDependencies
       return refresh();
     }),
     verify: () => exclusive(refresh),
+    // Đơn đã tạo có tổng khác tổng đã báo giá: bắt buộc người dùng xác nhận trước khi thanh toán.
+    needsPriceConfirmation: () => priceNeedsConfirmation(),
+    acknowledgePrice: () => {
+      if (!state.orderId || !state.order) throw new Error('Chưa có đơn để xác nhận giá.');
+      if (!verified) throw new Error('Hãy xác minh trạng thái đơn trước khi xác nhận giá.');
+      state.priceAcknowledged = true;
+      save();
+    },
     pay: (method: PaymentRequest['method'], mockOutcome: 'SUCCESS' | 'FAIL', newAttempt = false) => exclusive(async () => {
       if (!verified || !state.orderId || !state.order) throw new Error('Hãy xác minh trạng thái đơn trước khi thanh toán.');
       if (paidStatuses.includes(state.order.status) || state.order.status === 'CANCELLED') {
         throw new Error('Đơn không còn ở trạng thái thanh toán.');
       }
       if (newAttempt && state.order.status !== 'PAYMENT_FAILED') throw new Error('Chỉ tạo lần thử mới sau khi xác nhận thanh toán thất bại.');
+      // Chỉ chặn lần thanh toán đầu; một attempt đã lưu là replay của yêu cầu người dùng đã xác nhận.
+      if (!state.attempt && priceNeedsConfirmation()) {
+        throw new Error('Tổng của đơn khác với tổng đã báo giá. Hãy xác nhận tổng mới hoặc hủy đơn trước khi thanh toán.');
+      }
       if (!state.attempt || newAttempt) {
         state.attempt = { key: deps.key(), request: { orderId: state.orderId, method, mockOutcome } };
         save();
