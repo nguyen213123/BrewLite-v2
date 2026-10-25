@@ -4,8 +4,8 @@ import './globals.css';
 import Header from '@/components/Header';
 
 export const metadata: Metadata = {
-  title: 'BrewLite Mộc Vị — Đặt Đồ Uống Trực Tuyến & Thanh Toán Không Tiền Mặt',
-  description: 'Trà sữa & cà phê Mộc Vị. Đặt món trực tuyến, tùy chỉnh topping, thanh toán không tiền mặt và tích điểm thưởng.',
+  title: 'BrewLite',
+  description: 'Đặt đồ uống trực tuyến, tùy chỉnh topping, thanh toán không tiền mặt và tích điểm thưởng.',
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

@@ -1,4 +1,4 @@
-# ☕ BrewLite Mộc Vị (v2) — Ứng Dụng Đặt Đồ Uống & Thanh Toán Không Tiền Mặt
+# BrewLite
 
 **BrewLite** là hệ thống đặt trà sữa & cà phê trực tuyến theo mô hình thương mại điện tử hiện đại, tích hợp quản lý tồn kho theo thời gian thực (Optimistic Locking & Reservation), áp dụng mã khuyến mãi, thanh toán không tiền mặt an toàn với cơ chế chống gửi trùng (`Idempotency-Key`) và tích điểm thưởng khách hàng thân thiết (Loyalty Ledger).
 
