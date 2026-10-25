@@ -86,7 +86,7 @@ function fakeDb(overrides: Partial<Row> = {}) {
   const loyalty = { earn: jest.fn(), reverse: jest.fn(async () => undefined) };
   const transitions = new OrderTransactionsService(inventory as never, promotions as never);
   const uow = { run: async <T>(work: (t: Tx) => Promise<T>) => work(tx as unknown as Tx) };
-  const orders = new OrdersService(uow as never, {} as never, {} as never, {} as never, transitions, loyalty as never);
+  const orders = new OrdersService(uow as never, {} as never, {} as never, {} as never, transitions, loyalty as never, inventory as never);
   return { row, events, payments, hooks, inventory, promotions, loyalty, transitions, orders, snapshot, tx: tx as unknown as Tx };
 }
 

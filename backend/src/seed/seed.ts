@@ -1,4 +1,4 @@
-// Owner: TV1 — dữ liệu mẫu catalog + khuyến mãi. Chạy: npm --prefix backend run build && npm --prefix backend run seed
+// Owner: TV1 — dữ liệu mẫu catalog + khuyến mãi. Generate Prisma, rồi build:seed và seed theo README.
 // Chạy lại seed = RESET trạng thái demo (stock, usedCount) nhưng không xóa đơn hàng.
 import 'dotenv/config';
 import { PrismaPg } from '@prisma/adapter-pg';
