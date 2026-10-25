@@ -12,6 +12,25 @@
   --color-brew-ok-bg: #e7f0e4;
 }
 
+.shop { max-width: 1040px; margin: auto; padding: 48px 24px; color: #263c30; }
+.shop h1 { font-size: clamp(2rem, 5vw, 3.4rem); font-weight: 700; margin-bottom: 16px; }
+.shop h2 { font-size: 1.25rem; font-weight: 650; margin-bottom: 12px; }
+.shop p, .shop ul { margin: 16px 0; line-height: 1.7; }
+.shop li { margin-bottom: 8px; }
+.shop a { text-decoration: underline; text-underline-offset: 4px; }
+.shop-panel { border: 1px solid #cdd5c8; background: #fff; border-radius: 20px; padding: 24px; margin: 24px 0; }
+.shop-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 24px; }
+.shop-grid .shop-panel { margin: 0; }
+.shop-photo { width: 100%; height: 180px; object-fit: cover; border-radius: 12px; margin-bottom: 16px; }
+.shop label { display: block; margin: 16px 0; }
+.shop input:not([type=checkbox]), .shop select { border: 1px solid #86968a; padding: 10px; border-radius: 8px; max-width: 100%; margin-left: 8px; }
+.shop button, .shop .shop-action { display: inline-block; border-radius: 8px; padding: 12px 18px; background: #263c30; color: white; margin: 8px 8px 8px 0; cursor: pointer; }
+.shop button:disabled { opacity: .5; cursor: not-allowed; }
+.shop button:focus-visible, .shop a:focus-visible { outline: 3px solid #a45b27; outline-offset: 3px; }
+.shop-error { background: #fff0eb; border: 1px solid #b65738; padding: 16px; border-radius: 12px; }
+.eyebrow { text-transform: uppercase; letter-spacing: .18em; font-size: .75rem; }
+@media (max-width: 640px) { header > div { flex-wrap: wrap; gap: 12px; } header nav { flex-wrap: wrap; } .shop { padding: 28px 16px; } }
+
 :root { color-scheme: light; }
 body { margin: 0; background: #f7f4ed; color: #263c30; font-family: Arial, Helvetica, sans-serif; }
 button, a { -webkit-tap-highlight-color: transparent; }

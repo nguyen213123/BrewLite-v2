@@ -1,11 +1,6 @@
-import { MenuGrid } from '@/components/menu-grid';
+import MenuPage from './menu/page';
 
-export default function MenuPage() {
-  return (
-    <main className="mx-auto max-w-5xl px-6 py-10">
-      <h1 className="text-3xl font-semibold sm:text-4xl">Menu hôm nay</h1>
-      <p className="mt-2 mb-8 max-w-xl text-brew-muted">Chọn đồ uống yêu thích, thanh toán không tiền mặt và nhận nhanh tại quầy.</p>
-      <MenuGrid />
-    </main>
-  );
+// Trang chủ hiển thị menu, giống route /menu (trước đây Home render <Menu /> từ Catalog).
+export default function Home() {
+  return <MenuPage />;
 }

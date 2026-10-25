@@ -49,6 +49,19 @@ export function clearAuth(): void {
   }
 }
 
+export function updateUserPoints(points: number): void {
+  const current = getUser();
+  if (!current) return;
+  if (current.loyaltyPoints === points) return;
+
+  const updated: User = { ...current, loyaltyPoints: points };
+  memoryUser = updated;
+  if (typeof window !== 'undefined') {
+    sessionStorage.setItem(USER_KEY, JSON.stringify(updated));
+    window.dispatchEvent(new Event('brewlite-auth-change'));
+  }
+}
+
 export function isAuthenticated(): boolean {
   return !!getToken();
 }

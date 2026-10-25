@@ -1,8 +1,40 @@
 # BrewLite
 
-Khung khởi đầu cho nhóm 6 người: Next.js App Router + TypeScript + TailwindCSS, NestJS, Prisma và PostgreSQL. Có trang chào, health check, schema/migration ERD, module API/DTO/guard/port dùng chung, Docker Compose và CI. Các module nghiệp vụ được giao cho 5 thành viên theo [kế hoạch](docs/requirements/rebuild-plan.md).
+## Luồng đặt hàng và thanh toán
 
-Trước khi code module, đọc [hướng dẫn bộ khung API](docs/api/skeleton.md), [bàn giao issue #1](docs/requirements/team-handoff.md), [quy tắc nghiệp vụ](docs/requirements/business-rules.md), [ERD](docs/diagrams/erd.md) và [hợp đồng API](docs/api/README.md). 17 route đã được mount theo OpenAPI; service nghiệp vụ chưa triển khai trả 501, endpoint bảo vệ thiếu Bearer trả 401. Health vẫn chạy thật; khung chưa có đăng nhập/thanh toán hoạt động.
+Trên nhánh tích hợp checkout: `/` hoặc `/menu` → chọn sản phẩm/size/topping → `/cart` → `/checkout` → lịch sử đơn và điểm thưởng. `/payments` chuyển đến checkout; giao diện demo cũ được giữ tại `/payments/demo`.
+
+Backend dùng PostgreSQL thật để tính giá, giữ/trả kho và lượt khuyến mãi, lưu đơn/thanh toán và cộng/đảo điểm. Gateway Ví/Thẻ là mô phỏng theo phạm vi bài tập, không thu tiền thật.
+
+Sau khi cài dependencies và cấu hình env theo phần bên dưới:
+
+```powershell
+docker compose up -d db
+npm --prefix backend run prisma:deploy
+npm --prefix backend run build
+npm --prefix backend run build:seed
+npm --prefix backend run seed
+npm run dev
+```
+
+Seed dùng ID/mã cố định, gồm 17 sản phẩm, 5 topping, size S/M/L và 3 mã khuyến mãi. Chạy lại không nhân bản dữ liệu, **nhưng đặt lại stock/version sản phẩm và usedCount khuyến mãi về dữ liệu demo**. Chỉ seed database demo có thể đặt lại; không chạy trên dữ liệu cần giữ.
+
+Đăng ký tài khoản rồi chọn Cappuccino M + Kem × 2 và mã `SAVE10`: subtotal 120.000đ, giảm 12.000đ, tổng 108.000đ. Chọn kịch bản SUCCESS để nhận 10 điểm; FAIL trả kho/lượt mã và giữ giỏ. Sau FAIL có thể thử lại cùng đơn bằng khóa mới. Hủy PAID trước pha chế hoàn kho/lượt mã và đảo điểm.
+
+Checkout lưu yêu cầu theo tài khoản trong sessionStorage trước khi POST. Lỗi mạng/tải lại trang giữ cùng Idempotency-Key và dữ liệu; phải xác minh trạng thái đơn trước khi tiếp tục. Chỉ trừ các dòng đã mua sau GET xác nhận PAID/PREPARING/READY/COMPLETED, không trừ hai lần khi replay, không xóa món vừa thêm lại. Hoàn tất/hủy đơn cũ trước khi bắt đầu đơn mới. Đơn PENDING chưa có cơ chế tự hết hạn: dùng nút hủy nếu không tiếp tục.
+
+```powershell
+npm test          # Backend + test cart/checkout frontend; DB suite mặc định bỏ qua
+npm run test:db   # Toàn bộ test trên PostgreSQL tạm, tự migrate và xóa database sau test
+npm run lint
+npm run build
+```
+
+`test:db` yêu cầu PostgreSQL localhost có tài khoản CREATEDB (Docker Compose mặc định đã có). Lệnh không seed hoặc sửa database phát triển. Xem [kịch bản nghiệm thu checkout](docs/requirements/checkout-integration.md).
+
+Dự án cho nhóm 6 người: Next.js App Router + TypeScript + TailwindCSS, NestJS, Prisma và PostgreSQL; gồm catalog, giỏ hàng, checkout, xác thực, đơn hàng, thanh toán mô phỏng, khuyến mãi và điểm thưởng. Có health check, schema/migration ERD, Docker Compose và CI. Phân công module theo [kế hoạch](docs/requirements/rebuild-plan.md).
+
+Trước khi code module, đọc [hướng dẫn bộ khung API](docs/api/skeleton.md), [bàn giao issue #1](docs/requirements/team-handoff.md), [quy tắc nghiệp vụ](docs/requirements/business-rules.md), [ERD](docs/diagrams/erd.md) và [hợp đồng API](docs/api/README.md). API tuân theo OpenAPI; endpoint bảo vệ thiếu Bearer trả 401. Thanh toán dùng gateway mô phỏng, hiệu ứng nghiệp vụ được lưu trên PostgreSQL.
 
 ## Yêu cầu
 
@@ -42,7 +74,7 @@ Nếu PostgreSQL được cài riêng, bỏ lệnh Docker và sửa DATABASE_URL
 - API liveness: http://localhost:3001/api/health
 - API/database readiness: http://localhost:3001/api/health/ready
 
-Nhấn **Kiểm tra backend** trên trang chủ để kiểm tra kết nối từ trình duyệt. Có thể chạy riêng bằng `npm --prefix frontend run dev` và `npm --prefix backend run start:dev` trong hai terminal.
+Mở trang chủ để xem menu sau khi seed. Kiểm tra API/database tại các URL health bên trên. Có thể chạy riêng bằng `npm --prefix frontend run dev` và `npm --prefix backend run start:dev` trong hai terminal.
 
 ## Chạy toàn bộ bằng Docker
 
