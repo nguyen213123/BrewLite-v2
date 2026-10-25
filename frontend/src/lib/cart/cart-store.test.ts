@@ -9,7 +9,6 @@ import {
   totalQty,
   useCartStore,
   type AddItemInput,
-  // @ts-expect-error TS5097: required for Node native ESM test runner resolution
 } from './cart-store.ts';
 
 describe('Cart Store - Issue 5 & Issue Fixes', () => {

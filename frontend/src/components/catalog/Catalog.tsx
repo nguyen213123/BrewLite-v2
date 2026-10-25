@@ -3,37 +3,8 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { apiFetch } from '@/lib/api';
 import { useCartStore } from '@/lib/cart/cart-store';
-import type { ProductDetail, ProductPage, Size } from '@/lib/contracts/api.generated';
+import type { ProductDetail, Size } from '@/lib/contracts/api.generated';
 import { formatVnd } from '@/components/payments/payment-api';
-
-export function Menu() {
-  const [page, setPage] = useState(1);
-  const [retry, setRetry] = useState(0);
-  const [data, setData] = useState<ProductPage>();
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    const abort = new AbortController();
-    apiFetch<ProductPage>(`/products?page=${page}&limit=12`, { signal: AbortSignal.any([abort.signal, AbortSignal.timeout(5000)]) })
-      .then(value => { if (!abort.signal.aborted) setData(value); })
-      .catch(e => { if (!abort.signal.aborted) setError(e instanceof Error ? e.message : 'Không thể tải menu.'); })
-      .finally(() => { if (!abort.signal.aborted) setLoading(false); });
-    return () => abort.abort();
-  }, [page, retry]);
-  function changePage(next: number) { setLoading(true); setError(''); setPage(next); }
-  return <main className="shop"><p className="eyebrow">BrewLite / Menu</p><h1>Một ly cho hôm nay</h1>
-    <p>Chọn đồ uống, size và topping yêu thích.</p>
-    {loading ? <p role="status">Đang tải menu…</p> : error ? <p role="alert">{error} <button onClick={() => { setLoading(true); setError(''); setRetry(n => n + 1); }}>Thử lại</button></p> : <>
-      {!data?.data.length ? <p>Chưa có sản phẩm để hiển thị.</p> : <div className="shop-grid">{data.data.map(p => <article key={p.id} className="shop-panel">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={p.imageUrl} alt={p.name} className="shop-photo" />
-        <h2>{p.name}</h2><p>{p.description}</p><p>Từ {formatVnd(p.price)}</p>
-        <Link href={`/products/${p.id}`}>{p.stock > 0 ? 'Chọn size và topping' : 'Xem món · Đã hết hàng'}</Link>
-      </article>)}</div>}
-      {data && data.meta.totalPages > 1 && <p><button disabled={page === 1} onClick={() => changePage(page - 1)}>Trang trước</button> {page}/{data.meta.totalPages} <button disabled={page >= data.meta.totalPages} onClick={() => changePage(page + 1)}>Trang sau</button></p>}
-    </>}
-  </main>;
-}
 
 export function Product({ id }: { id: string }) {
   const [product, setProduct] = useState<ProductDetail>();

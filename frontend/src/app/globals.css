@@ -1,5 +1,17 @@
 @import "tailwindcss";
 
+/* Bảng màu BrewLite: lấy từ trang khởi đầu của khung dự án (nền kem, chữ/nút xanh rêu, viền xám xanh). */
+@theme {
+  --color-brew-bg: #f7f4ed;
+  --color-brew-ink: #263c30;
+  --color-brew-ink-hover: #1b2b22;
+  --color-brew-muted: #566b5e;
+  --color-brew-line: #cdd5c8;
+  --color-brew-danger: #9b2c2c;
+  --color-brew-danger-bg: #fbeaea;
+  --color-brew-ok-bg: #e7f0e4;
+}
+
 .shop { max-width: 1040px; margin: auto; padding: 48px 24px; color: #263c30; }
 .shop h1 { font-size: clamp(2rem, 5vw, 3.4rem); font-weight: 700; margin-bottom: 16px; }
 .shop h2 { font-size: 1.25rem; font-weight: 650; margin-bottom: 12px; }

@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { it } from 'node:test';
-// @ts-expect-error TS5097: Node native TypeScript test resolution
 import { createCheckoutSession, type CheckoutDependencies } from './session.ts';
 import type { Order, OrderRequest, PaymentResult } from '../contracts/api.generated';
 
