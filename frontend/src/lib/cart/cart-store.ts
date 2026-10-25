@@ -181,9 +181,14 @@ export const useCartStore = create<CartState>()(
           lines: [
             ...lines,
             {
-              ...input,
+              // Dựng từng trường, KHÔNG spread input => input.id không bao giờ được dùng lại.
               id: lineId,
               key,
+              productId: input.productId,
+              productName: input.productName,
+              imageUrl: input.imageUrl,
+              size: input.size,
+              sizePrice: input.sizePrice,
               toppings,
               qty: finalQty,
               version: 1,

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { beforeEach, describe, it } from 'node:test';
+import { createJSONStorage } from 'zustand/middleware';
 import {
   MAX_QTY,
   lineKey,
@@ -376,5 +377,108 @@ describe('Cart Store - Issue 5 & Issue Fixes', () => {
       useCartStore.getState().clear();
       assert.equal(getLines().length, 0);
     });
+  });
+});
+
+describe('Review PR #5: không tái sử dụng ID dòng giỏ', () => {
+  const base: AddItemInput = {
+    productId: 'prod-id-reuse',
+    productName: 'Cappuccino',
+    imageUrl: '',
+    size: 'M',
+    sizePrice: 50000,
+    toppings: [{ id: 'top-kem', name: 'Kem', price: 10000 }],
+  };
+  const FIXED_ID = 'fixed-line-id';
+  const lines = () => useCartStore.getState().lines;
+
+  beforeEach(() => {
+    useCartStore.setState({ lines: [], settledOrders: [] });
+  });
+
+  it('xóa rồi thêm lại cùng input.id: snapshot cũ không xóa món mới', () => {
+    useCartStore.getState().addItem({ ...base, id: FIXED_ID, qty: 2 });
+    const snapshot = useCartStore.getState().getSnapshot();
+    assert.notEqual(snapshot[0].id, FIXED_ID, 'input.id không được dùng làm id dòng');
+
+    useCartStore.getState().removeItem(lines()[0].id);
+    useCartStore.getState().addItem({ ...base, id: FIXED_ID, qty: 1 });
+    assert.notEqual(lines()[0].id, snapshot[0].id);
+
+    useCartStore.getState().removePurchased(snapshot);
+    assert.equal(lines().length, 1);
+    assert.equal(lines()[0].qty, 1);
+  });
+
+  it('clear rồi thêm lại cùng input.id: snapshot cũ giữ nguyên món mới', () => {
+    useCartStore.getState().addItem({ ...base, id: FIXED_ID, qty: 2 });
+    const snapshot = useCartStore.getState().getSnapshot();
+
+    useCartStore.getState().clear();
+    useCartStore.getState().addItem({ ...base, id: FIXED_ID, qty: 1 });
+    assert.notEqual(lines()[0].id, snapshot[0].id);
+
+    useCartStore.getState().removePurchased(snapshot);
+    assert.equal(lines().length, 1);
+    assert.equal(lines()[0].qty, 1);
+  });
+
+  it('settleOrder bằng snapshot cũ không trừ nhầm món thêm lại cùng input.id', () => {
+    useCartStore.getState().addItem({ ...base, id: FIXED_ID, qty: 2 });
+    const snapshot = useCartStore.getState().getSnapshot();
+    useCartStore.getState().clear();
+    useCartStore.getState().addItem({ ...base, id: FIXED_ID, qty: 1 });
+
+    useCartStore.getState().settleOrder('order-old', snapshot);
+    assert.equal(lines()[0].qty, 1);
+  });
+
+  it('gộp vào dòng có sẵn thì giữ nguyên id, kể cả khi truyền input.id khác', () => {
+    useCartStore.getState().addItem({ ...base, qty: 1 });
+    const originalId = lines()[0].id;
+    useCartStore.getState().addItem({ ...base, id: 'id-khac', qty: 2 });
+    assert.equal(lines().length, 1);
+    assert.equal(lines()[0].id, originalId);
+    assert.equal(lines()[0].qty, 3);
+  });
+
+  it('hai dòng khác cấu hình luôn có id khác nhau dù cùng input.id', () => {
+    useCartStore.getState().addItem({ ...base, id: FIXED_ID, size: 'S', qty: 1 });
+    useCartStore.getState().addItem({ ...base, id: FIXED_ID, size: 'L', qty: 1 });
+    assert.equal(lines().length, 2);
+    assert.notEqual(lines()[0].id, lines()[1].id);
+  });
+
+  it('snapshot thiếu id bị bỏ qua, không fallback theo key', () => {
+    useCartStore.getState().addItem({ ...base, qty: 3 });
+    useCartStore.getState().removePurchased([{ key: lines()[0].key, qty: 3 }]);
+    assert.equal(lines()[0].qty, 3);
+  });
+
+  it('settleOrder cùng orderId nhiều lần, kể cả sau reload, không trừ giỏ lần hai', async () => {
+    const map = new Map<string, string>();
+    const fake = {
+      getItem: (k: string) => map.get(k) ?? null,
+      setItem: (k: string, v: string) => void map.set(k, v),
+      removeItem: (k: string) => void map.delete(k),
+    };
+    useCartStore.persist.setOptions({ storage: createJSONStorage(() => fake) });
+    useCartStore.setState({ lines: [], settledOrders: [] });
+
+    useCartStore.getState().addItem({ ...base, qty: 5 });
+    const snapshot = useCartStore.getState().getSnapshot().map((s) => ({ ...s, qty: 2 }));
+    useCartStore.getState().settleOrder('order-1', snapshot);
+    useCartStore.getState().settleOrder('order-1', snapshot);
+    assert.equal(lines()[0].qty, 3);
+
+    // Mô phỏng reload: mất state trong bộ nhớ, storage còn.
+    const saved = map.get('brewlite-cart')!;
+    useCartStore.setState({ lines: [], settledOrders: [] });
+    map.set('brewlite-cart', saved);
+    await useCartStore.persist.rehydrate();
+    assert.deepEqual(useCartStore.getState().settledOrders, ['order-1']);
+
+    useCartStore.getState().settleOrder('order-1', snapshot);
+    assert.equal(lines()[0].qty, 3, 'Replay sau reload không được trừ lần hai');
   });
 });
