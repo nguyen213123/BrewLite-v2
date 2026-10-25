@@ -65,6 +65,79 @@ describe('Issue #14 — PromotionsService.price (Tx giả, không cần DB)', ()
   });
 });
 
+describe('Issue #14 — validate: giới hạn tiền và gộp dòng trùng (Tx giả)', () => {
+  const rule = { id: randomUUID(), code: 'SAVE10', ...base, startsAt: new Date('2020-01-01T00:00:00Z'), endsAt: new Date('2099-01-01T00:00:00Z'), version: 0 };
+  const uow = { run: (fn: (tx: Tx) => unknown) => fn({ promotion: { findUnique: async () => rule } } as unknown as Tx) } as unknown as UnitOfWork;
+  const pid = randomUUID();
+  const t1 = randomUUID();
+  const t2 = randomUUID();
+
+  const makeService = (lineTotals: number[]) => {
+  // mỗi dòng: sizePrice = lineTotal, qty = 1, không topping → lineTotal sau priceLine = đúng giá trị truyền vào
+  const resolve = jest.fn(async () =>
+    lineTotals.map(total => ({
+      productId: pid, productName: 'Test', size: 'M', sizePrice: total, toppings: [], qty: 1, unitPrice: total, lineTotal: total,
+    })),
+  );
+  const service = new PromotionsService({ resolve } as unknown as CatalogPricingPort, uow);
+  return { service, resolve };
+};
+  const validationError = { response: { code: 'VALIDATION_ERROR' }, status: 400 };
+
+  it('subtotal đúng 2.000.000.000 được chấp nhận', async () => {
+    const { service } = makeService([1_000_000_000, 1_000_000_000]);
+    const res = await service.validate(randomUUID(), { code: 'SAVE10', items: [{ productId: pid, size: 'M', qty: 1 }] } as never);
+    expect(res.subtotal).toBe(2_000_000_000);
+  });
+  it('subtotal vượt biên (3 dòng x 1 tỷ, hoặc 2 tỷ + 1) là 400 VALIDATION_ERROR', async () => {
+    for (const lines of [[1_000_000_000, 1_000_000_000, 1_000_000_000], [2_000_000_000, 1]]) {
+      const { service } = makeService(lines);
+      await expect(service.validate(randomUUID(), { code: 'SAVE10', items: [{ productId: pid, size: 'M', qty: 1 }] } as never))
+        .rejects.toMatchObject(validationError);
+    }
+  });
+  it('2 dòng trùng cấu hình (topping khác thứ tự) mỗi dòng 60 ly: gộp 120 > 99 → 400, không gọi catalog', async () => {
+    const { service, resolve } = makeService([1]);
+    const items = [
+      { productId: pid, size: 'M', qty: 60, toppingIds: [t1, t2] },
+      { productId: pid, size: 'M', qty: 60, toppingIds: [t2, t1] },
+    ];
+    await expect(service.validate(randomUUID(), { code: 'SAVE10', items } as never)).rejects.toMatchObject(validationError);
+    expect(resolve).not.toHaveBeenCalled();
+  });
+  it('gộp đúng 99 ly là hợp lệ và catalog nhận 1 dòng đã gộp', async () => {
+    const { service, resolve } = makeService([120000]);
+    const items = [
+      { productId: pid, size: 'M', qty: 50, toppingIds: [t1, t2] },
+      { productId: pid, size: 'M', qty: 49, toppingIds: [t2, t1] },
+    ];
+    await service.validate(randomUUID(), { code: 'SAVE10', items } as never);
+    expect(resolve).toHaveBeenCalledTimes(1);
+    const passed = (resolve.mock.calls[0] as unknown[])[1] as { qty: number }[];
+    expect(passed).toHaveLength(1);
+    expect(passed[0].qty).toBe(99);
+  });
+  it('khác size hoặc khác tập topping thì KHÔNG gộp', async () => {
+    const { service, resolve } = makeService([120000]);
+    const items = [
+      { productId: pid, size: 'M', qty: 60, toppingIds: [t1] },
+      { productId: pid, size: 'L', qty: 60, toppingIds: [t1] },
+      { productId: pid, size: 'M', qty: 60, toppingIds: [t1, t2] },
+    ];
+    await service.validate(randomUUID(), { code: 'SAVE10', items } as never);
+    const passed = (resolve.mock.calls[0] as unknown[])[1] as { qty: number }[];
+    expect(passed).toHaveLength(3);
+    expect(passed.every(i => i.qty === 60)).toBe(true);
+  });
+  it('validate trả cùng subtotal/total với buildQuote', async () => {
+     const { service } = makeService([30000, 90000]);
+     const res = await service.validate(randomUUID(), { code: 'SAVE10', items: [{ productId: pid, size: 'M', qty: 1 }] } as never);
+     expect(res.subtotal).toBe(120000);
+     expect(res.discount).toBe(12000);
+     expect(res.total).toBe(108000);
+   });
+});
+
 const dbDescribe = process.env.RUN_DB_TESTS === '1' ? describe : describe.skip;
 dbDescribe('Issue #14 — Khuyến mãi trên PostgreSQL', () => {
   let prisma: PrismaService;

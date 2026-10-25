@@ -8,6 +8,7 @@ import { UnitOfWork } from '../../common/database/unit-of-work';
 import { evaluatePromotion, normalizeCode } from './promotion-rules';
 import { buildQuote, normalizeCartItems } from '../orders/domain/order-pricing';
 
+
 const invalidPromotion = () => new ApiError(422, 'PROMOTION_INVALID', 'Mã không hợp lệ hoặc không đủ điều kiện');
 const exhaustedPromotion = () => new ApiError(409, 'PROMOTION_EXHAUSTED', 'Mã khuyến mãi đã hết lượt sử dụng');
 
@@ -18,6 +19,7 @@ export class PromotionsService implements PromotionsPort, PromotionRulesPort {
   /** POST /promotions/validate — không giữ lượt, subtotal luôn tính từ catalog. */
   validate(_userId: string, input: Api.PromotionValidationRequest): Promise<Api.PromotionValidation> {
     return this.unitOfWork.run(async tx => {
+
       const items = await this.catalog.resolve(tx, normalizeCartItems(input.items));
       const subtotal = buildQuote(items, { promotionId: null, promotionCode: null, discount: 0 }).subtotal;
       const snapshot = await this.price(tx, input.code, subtotal);
