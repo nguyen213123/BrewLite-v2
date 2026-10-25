@@ -25,6 +25,8 @@ integration('Real checkout: auth/catalog/create/inventory/promotion/payment/loya
     process.env.JWT_SECRET = 'checkout-integration-test-only-secret-at-least-32';
     const module = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = module.createNestApplication(); configureApp(app); await app.init();
+    // Bind once before parallel Supertest requests instead of racing auto-listen.
+    await app.listen(0, '127.0.0.1');
     prisma = app.get(PrismaService);
     const auth = await request(app.getHttpServer()).post('/api/auth/register')
       .send({ email: `checkout-${randomUUID()}@example.com`, password: 'CheckoutPass123!' }).expect(201);
@@ -37,7 +39,7 @@ integration('Real checkout: auth/catalog/create/inventory/promotion/payment/loya
       await db?.drop();
     }
   }, 60_000);
-  function post(url: string, body: unknown, key = randomUUID()) {
+  function post(url: string, body: unknown, key: string = randomUUID()) {
     return request(app.getHttpServer()).post(`/api${url}`).auth(token, { type: 'bearer' })
       .set('Idempotency-Key', key).send(body as object);
   }
@@ -128,5 +130,105 @@ integration('Real checkout: auth/catalog/create/inventory/promotion/payment/loya
     expect(responses.filter(r => r.status === 201)).toHaveLength(1);
     expect(responses.filter(r => r.status === 409)).toHaveLength(9);
     expect((await prisma.product.findUniqueOrThrow({ where: { id: f.id } })).stock).toBe(0);
+  }, 30_000);
+
+  // No provider overrides: JWT, catalog, idempotency, inventory, promotions,
+  // transitions and loyalty all use the production implementations and PostgreSQL.
+  async function concurrentReplays(url: string, body: object, key: string, status: number) {
+    const responses = await Promise.all(Array.from({ length: 10 }, () => post(url, body, key)));
+    for (const response of responses) {
+      if (response.status === 409) {
+        expect(response.body.code).toBe('IDEMPOTENCY_IN_PROGRESS');
+        expect(response.headers['retry-after']).toBe('1');
+      } else {
+        expect(response.status).toBe(status);
+      }
+    }
+    const winners = responses.filter(r => r.status === status && r.headers['idempotency-replayed'] === 'false');
+    expect(winners).toHaveLength(1);
+    const original = winners[0].body;
+    for (const response of responses.filter(r => r.status === status)) {
+      expect(response.body).toEqual(original);
+      expect(response.headers['idempotency-replayed']).toBe(response === winners[0] ? 'false' : 'true');
+    }
+    // Also recover any in-flight/timeout response with the original key and payload.
+    const replay = await post(url, body, key).expect(status).expect('Idempotency-Replayed', 'true');
+    expect(replay.body).toEqual(original);
+    return original;
+  }
+
+  it('same-key concurrent creates commit exactly one order, stock hold, promotion use and event', async () => {
+    const f = await fixture(2, 1), key = randomUUID();
+    const created = await concurrentReplays('/orders', f.body, key, 201);
+    expect(created).toMatchObject({ status: 'PENDING', reservationStatus: 'HELD', total: 108000 });
+    expect(await prisma.order.count({ where: { items: { some: { productId: f.id } } } })).toBe(1);
+    expect(await prisma.orderItem.count({ where: { orderId: created.id } })).toBe(1);
+    expect(await prisma.orderEvent.count({ where: { orderId: created.id } })).toBe(1);
+    expect(await prisma.product.findUniqueOrThrow({ where: { id: f.id } })).toMatchObject({ stock: 0, version: 1 });
+    expect(await prisma.promotion.findUniqueOrThrow({ where: { id: f.promo.id } })).toMatchObject({ usedCount: 1, version: 1 });
+    const records = await prisma.idempotencyRecord.findMany({ where: { userId, scope: 'CREATE_ORDER', key } });
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ status: 'COMPLETED', httpStatus: 201, response: created });
+    // Replays above succeeded even though the original exhausted both resources.
+    const conflict = await post('/orders', { ...f.body, items: [{ ...f.body.items[0], qty: 1 }] }, key).expect(409);
+    expect(conflict.body.code).toBe('IDEMPOTENCY_KEY_REUSED');
+    expect(await prisma.order.count({ where: { items: { some: { productId: f.id } } } })).toBe(1);
+  }, 30_000);
+
+  it('same-key concurrent payments commit one payment, PAID event and EARN without re-deducting stock', async () => {
+    const f = await fixture();
+    const created = await post('/orders', f.body).expect(201);
+    const before = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    const key = randomUUID(), body = { orderId: created.body.id, method: 'CARD', mockOutcome: 'SUCCESS' };
+    const paid = await concurrentReplays('/payments', body, key, 200);
+    expect(paid).toMatchObject({ order: { id: created.body.id, status: 'PAID', reservationStatus: 'CONSUMED', version: 1 }, loyaltyPointsEarned: 10 });
+    expect(await prisma.payment.count({ where: { orderId: created.body.id } })).toBe(1);
+    expect(await prisma.orderEvent.count({ where: { orderId: created.body.id } })).toBe(2);
+    const entries = await prisma.loyaltyEntry.findMany({ where: { orderId: created.body.id } });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ kind: 'EARN', points: 10 });
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: userId } })).loyaltyPoints).toBe(before.loyaltyPoints + 10);
+    expect(await prisma.product.findUniqueOrThrow({ where: { id: f.id } })).toMatchObject({ stock: 18, version: 1 });
+    expect(await prisma.promotion.findUniqueOrThrow({ where: { id: f.promo.id } })).toMatchObject({ usedCount: 1, version: 1 });
+    const records = await prisma.idempotencyRecord.findMany({ where: { userId, scope: 'PAY_ORDER', key } });
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ status: 'COMPLETED', httpStatus: 200, response: paid });
+    const conflict = await post('/payments', { ...body, method: 'WALLET' }, key).expect(409);
+    expect(conflict.body.code).toBe('IDEMPOTENCY_KEY_REUSED');
+    const auth = await request(app.getHttpServer()).post('/api/auth/register')
+      .send({ email: `${randomUUID()}@example.com`, password: 'CheckoutPass123!' }).expect(201);
+    const other = await request(app.getHttpServer()).post('/api/payments').auth(auth.body.accessToken as string, { type: 'bearer' })
+      .set('Idempotency-Key', key).send(body).expect(404);
+    expect(other.body.code).toBe('ORDER_NOT_FOUND');
+    expect(await prisma.payment.count({ where: { orderId: created.body.id } })).toBe(1);
+    expect(await prisma.idempotencyRecord.count({ where: { userId: auth.body.user.id, key } })).toBe(0);
+  }, 30_000);
+
+  it('same-key concurrent FAIL releases once; a new payment key retries the same order exactly once', async () => {
+    const f = await fixture();
+    const created = await post('/orders', f.body).expect(201);
+    const before = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    const key = randomUUID(), body = { orderId: created.body.id, method: 'WALLET', mockOutcome: 'FAIL' };
+    const failed = await concurrentReplays('/payments', body, key, 200);
+    expect(failed).toMatchObject({ payment: { status: 'FAILED' }, order: { status: 'PAYMENT_FAILED', reservationStatus: 'RELEASED' }, loyaltyPointsEarned: 0 });
+    expect(await prisma.payment.count({ where: { orderId: created.body.id } })).toBe(1);
+    expect(await prisma.product.findUniqueOrThrow({ where: { id: f.id } })).toMatchObject({ stock: 20, version: 2 });
+    expect(await prisma.promotion.findUniqueOrThrow({ where: { id: f.promo.id } })).toMatchObject({ usedCount: 0, version: 2 });
+    expect(await prisma.loyaltyEntry.count({ where: { orderId: created.body.id } })).toBe(0);
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: userId } })).loyaltyPoints).toBe(before.loyaltyPoints);
+    const paid = await concurrentReplays('/payments', { ...body, mockOutcome: 'SUCCESS' }, randomUUID(), 200);
+    expect(paid.order).toMatchObject({ id: created.body.id, status: 'PAID', reservationStatus: 'CONSUMED', total: 108000 });
+    // Old FAIL remains replayable without undoing the successful retry.
+    const old = await post('/payments', body, key).expect(200).expect('Idempotency-Replayed', 'true');
+    expect(old.body).toEqual(failed);
+    expect(await prisma.order.findUniqueOrThrow({ where: { id: created.body.id } })).toMatchObject({ status: 'PAID', reservationStatus: 'CONSUMED', version: 3 });
+    expect(await prisma.order.count({ where: { items: { some: { productId: f.id } } } })).toBe(1);
+    expect(await prisma.payment.count({ where: { orderId: created.body.id } })).toBe(2);
+    expect(await prisma.payment.count({ where: { orderId: created.body.id, status: 'SUCCEEDED' } })).toBe(1);
+    expect(await prisma.orderEvent.count({ where: { orderId: created.body.id } })).toBe(4);
+    expect(await prisma.product.findUniqueOrThrow({ where: { id: f.id } })).toMatchObject({ stock: 18, version: 3 });
+    expect(await prisma.promotion.findUniqueOrThrow({ where: { id: f.promo.id } })).toMatchObject({ usedCount: 1, version: 3 });
+    expect(await prisma.loyaltyEntry.count({ where: { orderId: created.body.id, kind: 'EARN' } })).toBe(1);
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: userId } })).loyaltyPoints).toBe(before.loyaltyPoints + 10);
   }, 30_000);
 });
