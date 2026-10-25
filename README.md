@@ -26,7 +26,7 @@ Dự án được phát triển cho nhóm 6 thành viên với kiến trúc tác
 
 | Tầng (Layer) | Công nghệ chính | Vai trò trong dự án |
 | --- | --- | --- |
-| **Frontend (`frontend/`)** | Next.js 16 (App Router), React 19, TypeScript, TailwindCSS v4, Zustand | Giao diện người dùng phong cách **Mộc Vị** (Xanh Mint Pastel `#cbe8d3`, Kem Cát `#faf6ec` / `#efe5d4`, Nâu Cà Phê `#6d4c3d`), lưu giỏ hàng bền vững (`localStorage`) và quản lý phiên thanh toán an toàn (`sessionStorage`). |
+| **Frontend (`frontend/`)** | Next.js 16 (App Router), React 19, TypeScript, TailwindCSS v4, Zustand | Giao diện người dùng hiện đại (Xanh Mint Pastel `#cbe8d3`, Kem Cát `#faf6ec` / `#efe5d4`, Nâu Cà Phê `#6d4c3d`), lưu giỏ hàng bền vững (`localStorage`) và quản lý phiên thanh toán an toàn (`sessionStorage`). |
 | **Backend (`backend/`)** | NestJS 11, TypeScript, Prisma ORM 7, Passport JWT, class-validator | Xử lý toàn bộ quy tắc nghiệp vụ: báo giá server-side, giữ/trả kho (`UnitOfWork` transaction), State Machine đơn hàng, Idempotency (`CREATE_ORDER`, `PAY_ORDER`), khuyến mãi và sổ cái điểm thưởng (`EARN` / `REVERSE`). |
 | **Database (`db`)** | PostgreSQL 17 | Lưu trữ bền vững với ràng buộc toàn vẹn (`CHECK`, `UNIQUE`, khóa ngoại) và kiểm soát tranh chấp tồn kho/phiên bản đơn hàng. |
 | **Hạ tầng & QA** | Docker Compose, GitHub Actions CI, OpenAPI / AJV Contract Check | Đóng gói đa container, kiểm tra hợp đồng API tự động và môi trường QA độc lập (`tmpfs`). |
@@ -37,11 +37,11 @@ Dự án được phát triển cho nhóm 6 thành viên với kiến trúc tác
 
 ### Các trang giao diện (Frontend Routes)
 
-Toàn bộ các trang được thiết kế đồng bộ theo bảng màu **BrewLite Mộc Vị**:
+Toàn bộ các trang được thiết kế đồng bộ theo bảng màu **BrewLite**:
 
 | Đường dẫn (Route) | Trang chức năng | Mô tả chi tiết |
 | --- | --- | --- |
-| `/` hoặc `/menu` | **Trang chủ & Thực đơn** | Hero banner Mộc Vị, danh sách đồ uống phân trang (`GET /api/products`), bộ khung thẻ kem cát và giới thiệu thương hiệu. |
+| `/` hoặc `/menu` | **Trang chủ & Thực đơn** | Hero banner BrewLite, danh sách đồ uống phân trang (`GET /api/products`), bộ khung thẻ kem cát và giới thiệu thương hiệu. |
 | `/products/[id]` | **Chi tiết đồ uống** | Chọn kích cỡ bắt buộc (`S` / `M` / `L`), chọn nhiều topping tùy ý, chỉnh số lượng theo tồn kho, tính giá tạm tính và thêm vào giỏ. |
 | `/cart` | **Giỏ hàng** | Quản lý danh sách món đã chọn, gộp dòng cùng cấu hình, tăng/giảm số lượng (`1–99`), xem tạm tính và điểm thưởng dự kiến. |
 | `/checkout` | **Thanh toán & Đặt đơn** | Tiến trình 3 bước: **(1)** Kiểm tra giỏ & Báo giá khuyến mãi → **(2)** Tạo đơn giữ hàng & Thanh toán mô phỏng Ví/Thẻ (`SUCCESS` / `FAIL`) → **(3)** Xác nhận kết quả & Tích điểm. |
