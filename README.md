@@ -120,6 +120,8 @@ Seed tạo hoặc cập nhật 17 sản phẩm, 5 topping, các kích thước s
 
 **Lưu ý:** Mỗi lần chạy seed, tồn kho (`stock`) của sản phẩm và số lượt sử dụng (`usedCount`) của khuyến mãi được đặt lại về giá trị mẫu. Không chạy seed trên database có dữ liệu cần giữ nếu chưa sao lưu.
 
+Seed cũng đặt lại tên, giá, mô tả, ảnh, size và topping của các sản phẩm trong danh sách seed về giá trị mẫu; không xóa đơn hàng và không xóa sản phẩm hay mã ngoài danh sách seed.
+
 ## Cấu trúc và cách đóng góp
 
 ```text
