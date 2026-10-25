@@ -3,9 +3,9 @@ info:
   title: BrewLite API
   version: 1.0.0
   description: >-
-    Baseline issue #1, 22/10/2026. Routes/DTO/guards đã được dựng trong API skeleton. Chỉ health có nghiệp vụ thật;
-    service chưa triển khai trả 501 FEATURE_NOT_IMPLEMENTED. Protected routes thiếu JWT trả 401; khi IdentityPort chưa
-    triển khai, Bearer không được tin cậy và trả 501. Success schema/fixture là contract mục tiêu cho từng module.
+    Contract baseline issue #1, cập nhật mô tả trạng thái 26/10/2026. Các route nghiệp vụ và JWT đã tích hợp
+    với PostgreSQL; gateway Ví/Thẻ là mock theo MVP. Protected routes thiếu hoặc sai JWT trả 401.
+    Các response 501 giữ để tham chiếu skeleton cũ, không phải hành vi nghiệm thu runtime hiện tại.
 servers:
   - url: http://localhost:3001/api
     description: Local development

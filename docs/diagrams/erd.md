@@ -1,6 +1,6 @@
 # ERD và quyền sở hữu schema — BrewLite v1
 
-Đọc cùng [quy tắc nghiệp vụ](../requirements/business-rules.md) và [schema Prisma tham chiếu](schema.prisma). Bộ khung API đã đưa 13 bảng nghiệp vụ này vào schema runtime bằng migration nền `20261022010000_api_baseline`, giữ SystemCheck và migration cũ. Service nghiệp vụ vẫn là stub để thành viên triển khai.
+Đọc cùng [quy tắc nghiệp vụ](../requirements/business-rules.md) và [schema Prisma tham chiếu](schema.prisma). Bộ khung API đã đưa 13 bảng nghiệp vụ này vào schema runtime bằng migration nền `20261022010000_api_baseline`, giữ SystemCheck và migration cũ. Tại main ngày 26/10/2026, service nghiệp vụ đã tích hợp PostgreSQL; xem [nghiệm thu](../qa/final/README.md). Gateway thanh toán là mock theo MVP.
 
 ```mermaid
 erDiagram

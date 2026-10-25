@@ -2,7 +2,7 @@
 
 ## Luồng đặt hàng và thanh toán
 
-Trên nhánh tích hợp checkout: `/` hoặc `/menu` → chọn sản phẩm/size/topping → `/cart` → `/checkout` → lịch sử đơn và điểm thưởng. `/payments` chuyển đến checkout; giao diện demo cũ được giữ tại `/payments/demo`.
+Trên `main`: `/` hoặc `/menu` → chọn sản phẩm/size/topping → `/cart` → `/checkout` → lịch sử đơn và điểm thưởng. `/payments` chuyển đến checkout; giao diện demo cũ được giữ tại `/payments/demo`.
 
 Backend dùng PostgreSQL thật để tính giá, giữ/trả kho và lượt khuyến mãi, lưu đơn/thanh toán và cộng/đảo điểm. Gateway Ví/Thẻ là mô phỏng theo phạm vi bài tập, không thu tiền thật.
 
@@ -31,6 +31,20 @@ npm run build
 ```
 
 `test:db` yêu cầu PostgreSQL localhost có tài khoản CREATEDB (Docker Compose mặc định đã có). Lệnh không seed hoặc sửa database phát triển. Xem [kịch bản nghiệm thu checkout](docs/requirements/checkout-integration.md).
+
+## Nghiệm thu và bàn giao
+
+[Ma trận và kết quả nghiệm thu](docs/qa/final/README.md), [bằng chứng Menu desktop/mobile](docs/qa/issue-4/README.md) và [checklist chạy từ clone mới](docs/qa/final/human-signoff.md) được lưu cùng mã nguồn. Hồ sơ kỹ thuật không thay cho xác nhận demo/review của thành viên.
+
+Để kiểm tra trên Docker sạch mà không sửa database/env phát triển:
+
+```powershell
+npm run qa:up          # build, migrate, seed database QA tmpfs riêng; UI 3400 / API 3401
+npm run qa:benchmark   # đo latency trên QA, lưu docs/qa/final/latency.json
+npm run qa:down        # xóa riêng container/network và dữ liệu QA
+```
+
+QA dùng dữ liệu có thể bỏ; chạy lại `qa:up`/seed đặt lại dữ liệu mẫu. Các cổng 3400/3401 phải còn trống. Cổng PostgreSQL QA không được publish. Không dùng tài khoản hoặc dữ liệu thật trong QA. Gateway mock, đơn PENDING không tự hết hạn, chưa đồng bộ checkout đa tab theo phạm vi MVP.
 
 Dự án cho nhóm 6 người: Next.js App Router + TypeScript + TailwindCSS, NestJS, Prisma và PostgreSQL; gồm catalog, giỏ hàng, checkout, xác thực, đơn hàng, thanh toán mô phỏng, khuyến mãi và điểm thưởng. Có health check, schema/migration ERD, Docker Compose và CI. Phân công module theo [kế hoạch](docs/requirements/rebuild-plan.md).
 
@@ -138,7 +152,7 @@ docs/diagrams/          Kiến trúc, ERD, Use Case
 .github/workflows/      CI
 ```
 
-Các module đã có sẵn trong `backend/src/modules/`; thay thân hàm stub trong service đúng phân công. Controller/DTO và các port trong `backend/src/common/contracts/ports.ts` là điểm tích hợp chung. Thành viên thêm thư viện JWT/bcrypt/Zustand cần thiết cùng module; không bỏ guard hoặc đưa fixture vào runtime để trả success giả.
+Các module nghiệp vụ nằm trong `backend/src/modules/`. Controller/DTO và các port trong `backend/src/common/contracts/ports.ts` là điểm tích hợp chung; thay đổi module cần giữ transaction, guard và hợp đồng API. Không đưa fixture vào runtime để trả success giả.
 
 Mỗi tính năng có nhánh riêng, PR và ít nhất một người khác review. Cập nhật docs/api và phối hợp migration khi thay đổi contract/schema. CI kiểm tra lint, test, build và kết nối database thật qua PostgreSQL service. Quy tắc bắt buộc review/CI cần được bật trong cài đặt GitHub khi tạo repository.
 

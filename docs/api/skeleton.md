@@ -1,6 +1,6 @@
 # Bộ khung API để phát triển song song
 
-Khung này kế thừa baseline issue #1/PR #17. PR #17 cần được trưởng nhóm review/merge trước khi đưa khung này vào main. Tài liệu trên nhánh này là phần tích hợp đang chờ review. Theo quy ước nhóm, thành viên phát triển trên nhánh riêng và gửi PR; trưởng nhóm review và quyết định tích hợp.
+Khung này kế thừa baseline issue #1/PR #17 đã merge. Tài liệu giữ kiến trúc giao tiếp module; main hiện đã có nghiệp vụ thật. Theo quy ước nhóm, thành viên phát triển trên nhánh riêng và gửi PR; trưởng nhóm review và quyết định tích hợp. Trạng thái/bằng chứng cập nhật xem [nghiệm thu](../qa/final/README.md).
 
 ## Có gì chạy thật?
 
@@ -10,7 +10,7 @@ Khung này kế thừa baseline issue #1/PR #17. PR #17 cần được trưởng
 - Guard bắt buộc Bearer ở endpoint bảo vệ; CurrentUser chỉ từ IdentityPort; StaffGuard kiểm tra role đã được xác minh.
 - UnitOfWork dùng một Prisma transaction client, timeout/lock timeout theo baseline; helper assertTransition chứa đầy đủ cạnh được phép.
 
-Service nghiệp vụ hiện trả **501 FEATURE_NOT_IMPLEMENTED**. Không có đơn hàng/giá/tài khoản/thanh toán giả trả success trong runtime. AuthService.verifyAccessToken cũng là stub: thiếu Bearer trả 401, có Bearer vẫn trả 501 cho đến khi TV4 hiện thực xác minh JWT và nạp user DB. Không có dev token, header userId/role, hay chế độ bỏ qua guard.
+Catalog, JWT, order, inventory, promotion, loyalty và idempotency đã được hiện thực. Thiếu/sai Bearer trả 401; role/quyền sở hữu lấy từ JWT đã xác minh và user trong database. Không có dev token, header userId/role hay chế độ bỏ qua guard. Gateway WALLET/CARD mô phỏng; đơn/giá/kho/ledger được xử lý trên PostgreSQL, không fallback success khi API lỗi.
 
 Các kiểm thử HTTP override port bằng fixture chỉ nằm trong backend/test. Chúng chứng minh wiring/validation/response contract, không thay thế integration test nghiệp vụ của các thành viên.
 
@@ -24,7 +24,7 @@ Các kiểm thử HTTP override port bằng fixture chỉ nằm trong backend/te
 | TV4 | `backend/src/modules/auth/`, `order-history/`, `loyalty/` | AuthPort, IdentityPort, guards, LoyaltyPort/LoyaltyTransactionsPort; controller GET /orders/me và /orders/:id cùng file, /me đứng trước |
 | TV5 | `backend/src/modules/payments/`, `idempotency/` | PaymentsPort, MockPaymentGatewayPort, IdempotencyPort; không tạo State Machine thứ hai |
 
-Mỗi module đã có controller (nếu có endpoint), DTO, service stub và Nest module provider aliases. Giữ chữ ký public khi thay thân hàm; không tạo API hoặc enum trạng thái mới riêng cho module. Bắt đầu bằng nhánh riêng từ main mới nhất sau khi trưởng nhóm merge các PR nền. Nếu main chưa có baseline, có thể đọc/chuẩn bị theo nhánh PR nhưng không coi đó là chuẩn đã duyệt.
+Mỗi module có controller (nếu có endpoint), DTO, service và Nest provider aliases. Giữ chữ ký public khi thay thân hàm; không tạo API hoặc enum trạng thái riêng ngoài contract đã review. Bắt đầu bằng nhánh riêng từ main mới nhất; không mang lại service stub hoặc implementation cũ khi giải quyết xung đột.
 
 ## Interface và quy tắc transaction
 
@@ -32,12 +32,12 @@ Mỗi module đã có controller (nếu có endpoint), DTO, service stub và Nes
 
 - **TV1 → TV3:** CatalogPricingPort.resolve(tx, items) trả snapshot QuoteItem; PromotionRulesPort.price/reserve/release(tx,...) dùng chính tx caller truyền vào.
 - **TV3 → TV4:** OrderReadPort.listMine/findMine nhận userId đã xác minh và tự lọc quyền sở hữu. Controller lịch sử không tự lấy mọi đơn rồi lọc phía client.
-- **TV3 ↔ TV5:** IdempotencyPort.execute<T>(input, work) bao toàn bộ transaction, callback work nhận Tx. TV3 dùng scope CREATE_ORDER; TV5 dùng PAY_ORDER. Stub wrapper hiện cố ý không gọi callback, để không tạo thao tác ngoài cơ chế chống lặp.
-- **TV5 → TV3:** OrderTransactionsPort.loadOwned/prepareRetry/transition và InventoryPort dùng cùng tx. Helper assertTransition chỉ kiểm tra cạnh; TV3 vẫn phải triển khai conditional write/version, audit và hiệu ứng trong transaction.
+- **TV3 ↔ TV5:** IdempotencyPort.execute<T>(input, work) bao toàn bộ transaction, callback work nhận Tx. TV3 dùng scope CREATE_ORDER; TV5 dùng PAY_ORDER. Key PROCESSING, nghiệp vụ và snapshot COMPLETED cùng commit/rollback; replay hoàn tất trả trước kiểm tra lại trạng thái nghiệp vụ.
+- **TV5 → TV3:** OrderTransactionsPort.loadOwned/prepareRetry/transition và InventoryPort dùng cùng tx. Helper assertTransition kiểm tra cạnh; service dùng conditional write/version, OrderEvent và hiệu ứng trong transaction.
 - **TV5 → TV4:** LoyaltyTransactionsPort.earn/reverse(tx, storedOrder) cùng commit hoặc rollback với payment/cancel.
 - UnitOfWork.run(work) mở transaction ReadCommitted, maxWait=3s/timeout=5s và SET LOCAL lock_timeout=3s. TV3/TV5 đặt retry toàn bộ callback ở ngoài, không retry riêng một câu UPDATE. Không gọi cổng thanh toán mạng thật trong callback.
 - DTO đã chuẩn hóa email, mã promo và UUID; thành viên vẫn phải gộp/sort cart, canonical hash, kiểm tra catalog/tồn/giá/khuyến mãi theo business-rules.md. Validation DTO không bảo đảm nghiệp vụ đã đúng.
-- Khung chưa dùng JWT_SECRET; khi TV4 thực hiện auth phải validate cấu hình fail startup và áp dụng auth-policy.ts. Không dùng giá trị mặc định làm secret.
+- Auth validate JWT_SECRET tối thiểu 32 ký tự khi startup, áp dụng auth-policy.ts. Không dùng secret mặc định trong runtime; secret của CI/QA chỉ dùng trong môi trường thử riêng.
 
 ## Lệnh làm việc
 
@@ -67,18 +67,16 @@ Schema runtime và schema tham chiếu phải có cùng enum/model nghiệp vụ
 
 ## Kiểm tra DB riêng
 
-CI bật RUN_DB_TESTS=1 trên PostgreSQL tạm của job sau khi migrate. Muốn chạy local, chọn database kiểm thử đã migrate rồi thiết lập DATABASE_URL và RUN_DB_TESTS trong terminal; các ca tạo fixture trong transaction đều chủ đích rollback, không truncate/reset dữ liệu.
+CI bật RUN_DB_TESTS=1 trên PostgreSQL tạm của job sau khi migrate. Ở local dùng wrapper dưới đây: nó tạo database thử riêng, migrate, chạy toàn bộ suite rồi xóa, kể cả khi test thất bại. Không trỏ các suite vào database phát triển vì một số test tạo fixture thật.
 
 ```powershell
-$env:RUN_DB_TESTS = "1"
-# DATABASE_URL phải trỏ tới database kiểm thử đã migrate
-npm --prefix backend test
-Remove-Item Env:RUN_DB_TESTS
+docker compose up -d db
+npm run test:db
 ```
 
 Các suite tích hợp có **ghi dữ liệu mẫu thật** (tồn kho, đơn hàng) không chạy trên database đang dùng mà tự tạo database tạm `brewlite_test_<ngẫu nhiên>` qua `backend/test/support/temp-database.ts` (áp dụng migration, xóa trong `afterAll` kể cả khi test lỗi). Khi đó `DATABASE_URL` chỉ là máy chủ PostgreSQL cục bộ để chạy `CREATE/DROP DATABASE`, role cần quyền `CREATEDB`. Xem `docs/requirements/inventory-concurrency.md` để biết lệnh chạy và cách dọn database tạm còn sót.
 
-Database tests kiểm tra bảng, CHECK và unique nền; chưa chứng minh chống vượt tồn hoặc idempotency nghiệp vụ. TV3/TV5 bổ sung test tranh chấp thật khi hoàn thiện service. Không đóng các issue chức năng chỉ vì bộ khung build/test đạt.
+Database tests hiện bao gồm schema/constraints, deadlock, tranh tồn, quota mã, State Machine, idempotency và checkout HTTP với các module thật. Phân biệt suite mock port với suite nghiệp vụ tích hợp khi nêu bằng chứng; xem [ma trận nghiệm thu](../qa/final/README.md).
 
 ## Quy trình thay đổi và nghiệm thu
 
