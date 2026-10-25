@@ -35,24 +35,11 @@ export type AddItemResult =
   | { ok: true; capped: boolean; message?: string }
   | { ok: false; reason: 'MAX_LINES' | 'MAX_TOPPINGS' | 'INVALID'; message?: string };
 
-/**
- * Snapshot một dòng giỏ tại thời điểm tạo đơn, dùng cho cleanup sau khi đơn PAID.
- * `id` BẮT BUỘC: là định danh của instance dòng (mỗi lần dòng được tạo mới sẽ có id mới),
- * nhờ đó món thêm lại sau khi xóa/clear không bị trừ nhầm.
- * Luôn lấy snapshot qua `useCartStore.getState().getSnapshot()` (hoặc `createSnapshot()`),
- * không tự dựng `{ key, qty }`.
- */
 export type PurchasedLine = {
-  id: string;
   key: string;
   qty: number;
-};
-
-export type RemovePurchasedResult = {
-  /** Số mục snapshot đã khớp một dòng còn trong giỏ và được trừ. */
-  applied: number;
-  /** Số mục bị bỏ qua: thiếu id, qty không hợp lệ, hoặc dòng đã không còn trong giỏ. */
-  skipped: number;
+  id?: string;
+  lineId?: string;
 };
 
 /** Cùng sản phẩm + size + tập topping (sắp xếp theo ID) => cùng một dòng. */
@@ -83,7 +70,7 @@ export function totalQty(lines: CartLine[]): number {
 /** Chỉ gửi các trường theo contract (CartItem): không giá, không userId. */
 export function toCartItems(lines: CartLine[]): CartItem[] {
   return lines.map((l) => {
-    assertQtyInLimit(l.qty);
+    validateQty(l.qty);
     const toppingIds = [...l.toppings.map((t) => t.id)].sort();
     return toppingIds.length > 0
       ? { productId: l.productId, size: l.size, toppingIds, qty: l.qty }
@@ -93,22 +80,16 @@ export function toCartItems(lines: CartLine[]): CartItem[] {
 
 type CartState = {
   lines: CartLine[];
+  settledOrders: string[];
+  settleOrder: (orderId: string, purchased: PurchasedLine[]) => void;
   /** Hàm dùng chung: TV1 (trang chi tiết) và menu gọi để thêm vào giỏ. */
   addItem: (input: AddItemInput) => AddItemResult;
   setQty: (keyOrId: string, qty: number) => void;
   removeItem: (keyOrId: string) => void;
-  /**
-   * Chỉ trừ các dòng đã mua sau khi GET order xác nhận PAID; dòng thêm sau đó vẫn giữ.
-   * Chỉ đối chiếu theo `id` của dòng. Mục thiếu id bị bỏ qua an toàn (không trừ theo key).
-   * KHÔNG gọi khi thanh toán thất bại hoặc chưa rõ kết quả (lỗi mạng, PENDING).
-   */
-  removePurchased: (purchased: readonly PurchasedLine[]) => RemovePurchasedResult;
-  /**
-   * Chụp snapshot giỏ (id + key + qty) tại thời điểm tạo đơn. Checkout lưu snapshot này
-   * cùng orderId rồi chỉ đưa vào `removePurchased` SAU KHI GET order xác nhận PAID.
-   */
+  /** Chỉ trừ các dòng đã mua sau khi đơn PAID; dòng thêm sau đó vẫn giữ. */
+  removePurchased: (purchased: (PurchasedLine | CartLine)[]) => void;
+  /** Lấy snapshot giỏ hàng kèm định danh id để phục vụ thanh toán an toàn. */
   getSnapshot: () => PurchasedLine[];
-  /** Đồng nghĩa với getSnapshot (giữ để tương thích). */
   createSnapshot: () => PurchasedLine[];
   clear: () => void;
 };
@@ -128,14 +109,6 @@ export function validateQty(qty: number): void {
   }
 }
 
-/** Số lượng gửi đi/ghi vào giỏ phải là số nguyên dương và không vượt MAX_QTY. */
-export function assertQtyInLimit(qty: number): void {
-  validateQty(qty);
-  if (qty > MAX_QTY) {
-    throw new Error(`Số lượng sản phẩm tối đa là ${MAX_QTY}.`);
-  }
-}
-
 export const clampQty = (qty: number): number => {
   validateQty(qty);
   return Math.min(MAX_QTY, qty);
@@ -145,6 +118,16 @@ export const useCartStore = create<CartState>()(
   persist(
     (set, get) => ({
       lines: [],
+      settledOrders: [],
+      settleOrder: (orderId, purchased) => {
+        if (get().settledOrders.includes(orderId)) return;
+        // Persist cart deductions and receipt together, so reload/replay cannot deduct twice.
+        const deductions = new Map(purchased.filter(p => p.id).map(p => [p.id, p.qty]));
+        set(s => ({
+          lines: s.lines.map(l => ({ ...l, qty: l.qty - (deductions.get(l.id) ?? 0) })).filter(l => l.qty > 0),
+          settledOrders: [...s.settledOrders, orderId],
+        }));
+      },
       addItem: (input) => {
         const toppings = (input.toppings ?? []).filter((t, i, arr) => arr.findIndex((x) => x.id === t.id) === i);
         if (toppings.length > MAX_TOPPINGS) {
@@ -192,15 +175,20 @@ export const useCartStore = create<CartState>()(
 
         const capped = rawQty > MAX_QTY;
         const finalQty = Math.min(MAX_QTY, rawQty);
-        const lineId = input.id || generateLineId();
+        const lineId = generateLineId(); // Every newly inserted line is a new generation, even with the same configuration.
 
         set({
           lines: [
             ...lines,
             {
-              ...input,
+              // Dựng từng trường, KHÔNG spread input => input.id không bao giờ được dùng lại.
               id: lineId,
               key,
+              productId: input.productId,
+              productName: input.productName,
+              imageUrl: input.imageUrl,
+              size: input.size,
+              sizePrice: input.sizePrice,
               toppings,
               qty: finalQty,
               version: 1,
@@ -215,8 +203,7 @@ export const useCartStore = create<CartState>()(
         };
       },
       setQty: (keyOrId, qty) => {
-        assertQtyInLimit(qty);
-        const nextQty = qty;
+        const nextQty = clampQty(qty);
         set((s) => ({
           lines: s.lines.map((l) =>
             l.key === keyOrId || l.id === keyOrId ? { ...l, qty: nextQty } : l,
@@ -227,39 +214,40 @@ export const useCartStore = create<CartState>()(
         set((s) => ({
           lines: s.lines.filter((l) => l.key !== keyOrId && l.id !== keyOrId),
         })),
-      removePurchased: (purchased) => {
-        const deductions = new Map<string, number>();
-        let skipped = 0;
-        for (const p of purchased) {
-          const id = (p as { id?: unknown }).id;
-          if (typeof id !== 'string' || id === '' || !Number.isInteger(p.qty) || p.qty <= 0) {
-            skipped += 1; // thiếu id (snapshot cũ dạng { key, qty }) hoặc qty sai: bỏ qua, không đoán theo key
-            continue;
+      removePurchased: (purchased) =>
+        set((s) => {
+          const deductions = new Map<string, number>();
+          for (const p of purchased) {
+            const targetId = 'id' in p && p.id ? p.id : 'lineId' in p && p.lineId ? p.lineId : undefined;
+            if (!targetId) continue; // A key-only snapshot cannot distinguish a removed/re-added line.
+            const lookupKey = `id:${targetId}`;
+            deductions.set(lookupKey, (deductions.get(lookupKey) ?? 0) + p.qty);
           }
-          deductions.set(id, (deductions.get(id) ?? 0) + p.qty);
-        }
 
-        const existingIds = new Set(get().lines.map((l) => l.id));
-        let applied = 0;
-        for (const id of deductions.keys()) {
-          if (existingIds.has(id)) applied += 1;
-          else skipped += 1; // dòng đã bị xóa/clear: không trừ vào dòng mới cùng cấu hình
-        }
-
-        if (applied > 0) {
-          set((s) => ({
+          return {
             lines: s.lines
               .map((l) => {
-                const deduct = deductions.get(l.id);
-                return deduct ? { ...l, qty: l.qty - deduct, version: (l.version ?? 1) + 1 } : l;
+                const deductById = deductions.get(`id:${l.id}`);
+                const deductQty = deductById ?? 0;
+                return deductQty > 0 ? { ...l, qty: l.qty - deductQty } : l;
               })
               .filter((l) => l.qty > 0),
-          }));
-        }
-        return { applied, skipped };
-      },
-      getSnapshot: () => get().lines.map((l) => ({ id: l.id, key: l.key, qty: l.qty })),
-      createSnapshot: () => get().lines.map((l) => ({ id: l.id, key: l.key, qty: l.qty })),
+          };
+        }),
+      getSnapshot: () =>
+        get().lines.map((l) => ({
+          id: l.id,
+          lineId: l.id,
+          key: l.key,
+          qty: l.qty,
+        })),
+      createSnapshot: () =>
+        get().lines.map((l) => ({
+          id: l.id,
+          lineId: l.id,
+          key: l.key,
+          qty: l.qty,
+        })),
       clear: () => set({ lines: [] }),
     }),
     {
@@ -280,26 +268,7 @@ export const useCartStore = create<CartState>()(
           },
         };
       }),
-      partialize: (s) => ({ lines: s.lines }),
-      merge: (persisted, current) => {
-        const raw = (persisted as { lines?: unknown } | undefined)?.lines;
-        if (!Array.isArray(raw)) return current;
-        const lines = raw
-          .filter(
-            (l): l is CartLine =>
-              !!l &&
-              typeof l.key === 'string' &&
-              typeof l.productId === 'string' &&
-              Number.isFinite(l.sizePrice) &&
-              Array.isArray(l.toppings) &&
-              Number.isInteger(l.qty) &&
-              l.qty >= 1 &&
-              l.qty <= MAX_QTY,
-          )
-          .slice(0, MAX_LINES)
-          .map((l) => ({ ...l, id: typeof l.id === 'string' && l.id ? l.id : generateLineId() }));
-        return { ...current, lines };
-      },
+      partialize: (s) => ({ lines: s.lines, settledOrders: s.settledOrders }),
       migrate: (persistedState: unknown) => {
         const state = persistedState as { lines?: Partial<CartLine>[] };
         if (state?.lines && Array.isArray(state.lines)) {
