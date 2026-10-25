@@ -4,13 +4,13 @@ Ngày kiểm tra: 26/10/2026 (Asia/Saigon). Mã nguồn: `0eed8fe258c5266f73e40e
 
 | Tiêu chí | Kết quả và bằng chứng |
 | --- | --- |
-| Tên, ảnh, giá từ API; 17 sản phẩm | Đạt — [desktop](images/desktop-menu.png), [trang 2](images/desktop-page-2.png) |
-| Chọn đúng sản phẩm theo ID | Đạt — [Cappuccino](images/product-navigation.png) |
-| Mobile 390×844, không tràn ngang | Đạt — [menu mobile](images/mobile-menu.png); chiều rộng nội dung 375 ≤ 390 px |
-| Loading khi API chưa phản hồi | Đạt — [loading](images/mobile-loading.png), làm chậm truy vấn bằng khóa bảng trong DB QA |
-| API trả danh sách rỗng | Đạt — [desktop](images/desktop-empty.png), [mobile](images/mobile-empty.png) |
-| API không kết nối được | Đạt — [desktop](images/desktop-error.png), [mobile](images/mobile-error.png) |
-| Thử lại sau khi API hoạt động | Đạt — [kết quả sau Thử lại](images/mobile-retry-success.png) |
+| Tên, ảnh, giá từ API; 17 sản phẩm | Đạt — [desktop](images/desktop-menu.jpg), [trang 2](images/desktop-page-2.jpg) |
+| Chọn đúng sản phẩm theo ID | Đạt — [Cappuccino](images/product-navigation.jpg) |
+| Mobile 390×844, không tràn ngang | Đạt — [menu mobile](images/mobile-menu.jpg); chiều rộng nội dung 375 ≤ 390 px |
+| Loading khi API chưa phản hồi | Đạt — [loading](images/mobile-loading.jpg), làm chậm truy vấn bằng khóa bảng trong DB QA |
+| API trả danh sách rỗng | Đạt — [desktop](images/desktop-empty.jpg), [mobile](images/mobile-empty.jpg) |
+| API không kết nối được | Đạt — [desktop](images/desktop-error.jpg), [mobile](images/mobile-error.jpg) |
+| Thử lại sau khi API hoạt động | Đạt — [kết quả sau Thử lại](images/mobile-retry-success.jpg) |
 
 ## Chạy lại
 

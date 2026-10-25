@@ -20,12 +20,12 @@ Ngày: **26/10/2026**, Asia/Saigon. Baseline được kiểm thử: `0eed8fe258c
 | Phạm vi | Bằng chứng và kết quả |
 | --- | --- |
 | #2–4 Catalog/Menu/detail | 17 sản phẩm thật, hai trang, đúng ID; desktop/mobile/loading/empty/error/retry: [hồ sơ Menu](../issue-4/README.md) |
-| #3/#5 Size/topping/cart | M + Kem ×2 = 120.000đ; [chi tiết](images/product-mobile.png), [giỏ](images/cart-mobile.png), [giỏ rỗng](images/cart-empty-mobile.png); cart persistence/merge/quantity có test frontend |
+| #3/#5 Size/topping/cart | M + Kem ×2 = 120.000đ; [chi tiết](images/product-mobile.jpg), [giỏ](images/cart-mobile.jpg), [giỏ rỗng](images/cart-empty-mobile.jpg); cart persistence/merge/quantity có test frontend |
 | #6 Auth/quyền | Đăng ký/đăng nhập trên UI; test JWT, 401/403/404, cô lập chủ đơn, che lỗi trong auth/API/history suites |
-| #7/#13/#14 Quote/checkout/promotion | BADCODE có lỗi rõ; SAVE10 giảm 12.000 trên 120.000, tổng 108.000: [mã sai](images/promotion-invalid-mobile.png), [quote](images/quote-mobile.png) |
-| #10/#11 Thanh toán FAIL → reload → retry SUCCESS | Cùng đơn, FAIL giữ giỏ/0 điểm; SUCCESS 108.000 xóa đúng giỏ/10 điểm: [FAIL](images/payment-failed-mobile.png), [PAID](images/payment-paid-mobile.png) |
-| Giá thay đổi khi tạo đơn | Giá M từ 50.000 → 60.000 trong QA: chặn pay, reload vẫn chặn, phải xác nhận lại; [mobile](images/price-confirmation-mobile.png), [desktop](images/price-confirmation-desktop.png), [PAID sau xác nhận](images/payment-paid-desktop.png) |
-| #8/#12/#15 Hủy PAID/lịch sử/điểm | Hủy trước pha chế → CANCELLED, hoàn hiệu ứng, 0 điểm; [hủy](images/cancelled-mobile.png), [ledger +10/−10](images/loyalty-reversal-mobile.png), [lịch sử](images/history-desktop.png) |
+| #7/#13/#14 Quote/checkout/promotion | BADCODE có lỗi rõ; SAVE10 giảm 12.000 trên 120.000, tổng 108.000: [mã sai](images/promotion-invalid-mobile.jpg), [quote](images/quote-mobile.jpg) |
+| #10/#11 Thanh toán FAIL → reload → retry SUCCESS | Cùng đơn, FAIL giữ giỏ/0 điểm; SUCCESS 108.000 xóa đúng giỏ/10 điểm: [FAIL](images/payment-failed-mobile.jpg), [PAID](images/payment-paid-mobile.jpg) |
+| Giá thay đổi khi tạo đơn | Giá M từ 50.000 → 60.000 trong QA: chặn pay, reload vẫn chặn, phải xác nhận lại; [mobile](images/price-confirmation-mobile.jpg), [desktop](images/price-confirmation-desktop.jpg), [PAID sau xác nhận](images/payment-paid-desktop.jpg) |
+| #8/#12/#15 Hủy PAID/lịch sử/điểm | Hủy trước pha chế → CANCELLED, hoàn hiệu ứng, 0 điểm; [hủy](images/cancelled-mobile.jpg), [ledger +10/−10](images/loyalty-reversal-mobile.jpg), [lịch sử](images/history-desktop.jpg) |
 | #8 State Machine | Test mọi cạnh hợp lệ/bị cấm, expectedVersion, terminal states, STAFF guard, audit, late payment, chuyển đồng thời trong order-state/order-transitions/payments/checkout suites |
 | #9 Tranh tồn kho | inventory.integration và checkout.integration: tranh đơn, rollback, stock không âm, trả kho đúng một lần |
 | #11 Idempotency | DB integration: cùng key/cùng payload replay, khác payload 409, hai request đồng thời, retry/timeout không lặp hiệu ứng |
