@@ -4,10 +4,13 @@ import { useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { clearAuth, subscribeAuth, getAuthSnapshot, getAuthServerSnapshot } from '@/lib/auth';
+import { useCartStore, useCartHydrated, totalQty } from '@/lib/cart/cart-store';
 
 export default function Header() {
   const router = useRouter();
   const user = useSyncExternalStore(subscribeAuth, getAuthSnapshot, getAuthServerSnapshot);
+  const lines = useCartStore(s => s.lines);
+  const hydrated = useCartHydrated();
 
   function handleLogout() {
     clearAuth();
@@ -43,6 +46,8 @@ export default function Header() {
         </div>
 
         <nav className="flex items-center gap-4">
+          <Link href="/menu">Menu</Link>
+          <Link href="/cart">Giỏ hàng ({hydrated ? totalQty(lines) : 0})</Link>
           {user ? (
             <div className="flex items-center gap-3">
               <div className="flex items-center gap-2 text-xs">

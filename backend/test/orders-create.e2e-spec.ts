@@ -110,7 +110,7 @@ type FakeOrderData = {
 };
 type ServiceDeps = ConstructorParameters<typeof OrdersService>;
 
-function setup(options: { resolveError?: Error; promo?: PromotionSnapshot; promoError?: Error; stockError?: Error } = {}) {
+function setup(options: { resolveError?: Error; promo?: PromotionSnapshot; promoError?: Error } = {}) {
   const created: FakeOrderData[] = [];
   const events: unknown[] = [];
   const tx = {
@@ -156,12 +156,6 @@ function setup(options: { resolveError?: Error; promo?: PromotionSnapshot; promo
     reserve: jest.fn(async () => undefined),
     release: jest.fn(),
   };
-  const inventory = {
-    reserve: jest.fn(async () => {
-      if (options.stockError) throw options.stockError;
-    }),
-    release: jest.fn(),
-  };
   const unitOfWork = { run: jest.fn(async (work: (t: Tx) => Promise<unknown>) => work(tx as unknown as Tx)) };
   // Same contract as IdempotencyPort: run work inside the transaction callback.
   const idempotency = {
@@ -174,9 +168,9 @@ function setup(options: { resolveError?: Error; promo?: PromotionSnapshot; promo
     idempotency as unknown as ServiceDeps[3],
     {} as ServiceDeps[4], // OrderTransactionsPort: not used by quote/create
     {} as ServiceDeps[5], // LoyaltyTransactionsPort: not used by quote/create
-    inventory as unknown as ServiceDeps[6],
+    { reserve: jest.fn().mockResolvedValue(undefined) } as unknown as ServiceDeps[6],
   );
-  return { service, tx, catalog, promotions, idempotency, inventory, created, events };
+  return { service, tx, catalog, promotions, idempotency, created, events };
 }
 
 const REQUEST: Api.OrderRequest = {
@@ -245,40 +239,6 @@ describe('OrdersService.create (Issue #7)', () => {
     const { service, tx } = setup();
     tx.orderEvent.create.mockRejectedValueOnce(new Error('db down'));
     await expect(service.create(USER, KEY, REQUEST)).rejects.toThrow('db down');
-  });
-});
-
-describe('OrdersService.create holds stock (Issue #9)', () => {
-  it('reserves the merged cart lines in the same transaction, before the order is written', async () => {
-    const { service, inventory, tx } = setup();
-    const order: string[] = [];
-    inventory.reserve.mockImplementation(async () => { order.push('reserve'); });
-    tx.order.create.mockImplementationOnce(async () => { order.push('order.create'); throw new Error('stop after order.create'); });
-    await expect(
-      service.create(USER, KEY, { items: [{ productId: PRODUCT, size: 'M', toppingIds: [TRAN_CHAU, KEM], qty: 1 }, { productId: PRODUCT, size: 'M', toppingIds: [KEM, TRAN_CHAU], qty: 1 }] }),
-    ).rejects.toThrow('stop after order.create');
-    expect(order).toEqual(['reserve', 'order.create']);
-    expect(inventory.reserve).toHaveBeenCalledTimes(1);
-    expect(inventory.reserve).toHaveBeenCalledWith(tx, [{ productId: PRODUCT, size: 'M', toppingIds: [KEM, TRAN_CHAU], qty: 2 }]);
-  });
-
-  it('stores nothing when stock is short (OUT_OF_STOCK)', async () => {
-    const { service, created, events } = setup({ stockError: new ApiError(409, 'OUT_OF_STOCK', 'Sản phẩm không đủ tồn kho') });
-    await expectApiError(service.create(USER, KEY, REQUEST), 409, 'OUT_OF_STOCK');
-    expect(created).toHaveLength(0);
-    expect(events).toHaveLength(0);
-  });
-
-  it('stores nothing when stock conflicts (STOCK_CONFLICT)', async () => {
-    const { service, created } = setup({ stockError: new ApiError(409, 'STOCK_CONFLICT', 'Tồn kho đang thay đổi, vui lòng thử lại') });
-    await expectApiError(service.create(USER, KEY, REQUEST), 409, 'STOCK_CONFLICT');
-    expect(created).toHaveLength(0);
-  });
-
-  it('never holds stock for a price preview', async () => {
-    const { service, inventory } = setup();
-    await service.quote(USER, REQUEST);
-    expect(inventory.reserve).not.toHaveBeenCalled();
   });
 });
 

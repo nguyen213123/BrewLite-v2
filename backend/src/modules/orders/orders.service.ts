@@ -50,8 +50,6 @@ export class OrdersService implements OrdersPort {
       async tx => {
         const { quote, promo } = await this.priceCart(tx, items, input.promotionCode);
         if (promo.promotionId) await this.promotions.reserve(tx, promo.promotionId);
-        // Hold stock in the same transaction as the order: if there is not enough (OUT_OF_STOCK / STOCK_CONFLICT) or anything
-        // below fails, the promotion counter, the stock and the order all roll back together and nothing is left held.
         await this.inventory.reserve(tx, items);
         const order = await tx.order.create({
           data: {
