@@ -7,7 +7,6 @@ import { it } from 'node:test';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import ts from 'typescript';
-// @ts-expect-error TS5097: Node native TypeScript test resolution
 import { createCheckoutSession, createCheckoutLifecycle, paidStatuses } from '../../lib/checkout/session.ts';
 import type { CheckoutState } from '../../lib/checkout/session';
 
