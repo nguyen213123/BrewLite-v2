@@ -12,7 +12,11 @@ type Props = { product: ProductDetail; onAddToCart: (input: AddItemInput) => Add
 type Feedback = { kind: 'ok' | 'error'; text: string } | null;
 
 const choice = (selected: boolean) =>
-  `flex items-center justify-between gap-2 rounded-md border px-4 py-3 text-left transition ${selected ? 'border-[#3FA7C9] bg-[#F0F9FC] shadow-[0_0_0_1px_#3FA7C9]' : 'border-[#D2E6EC] bg-white hover:border-[#3FA7C9]'}`;
+  `flex items-center justify-between gap-2 rounded-xl border px-4 py-3 text-left transition ${
+    selected
+      ? 'border-[#6d4c3d] bg-[#cbe8d3]/55 text-[#4a2e20] shadow-[0_0_0_1px_#6d4c3d]'
+      : 'border-[#decbb4] bg-[#faf6ec] text-[#4a2e20] hover:border-[#6d4c3d] hover:bg-white'
+  }`;
 
 export function ProductDetailView({ product, onAddToCart }: Props) {
   const [size, setSize] = useState<Size | null>(product.sizes[0]?.size ?? null);
@@ -30,7 +34,9 @@ export function ProductDetailView({ product, onAddToCart }: Props) {
   const touch = () => setFeedback(null);
   const toggleTopping = (id: string) => {
     touch();
-    setToppingIds(current => (current.includes(id) ? current.filter(x => x !== id) : [...current, id]));
+    setToppingIds((current) =>
+      current.includes(id) ? current.filter((x) => x !== id) : [...current, id],
+    );
   };
 
   function submit() {
@@ -48,104 +54,243 @@ export function ProductDetailView({ product, onAddToCart }: Props) {
   }
 
   return (
-    <main className="mx-auto max-w-6xl px-6 pb-24 pt-8 text-[#12303B]">
-      <Link href="/menu" className="text-sm font-semibold text-[#4C8FA8] hover:text-[#1E6A86]">‹ &nbsp;Quay lại thực đơn</Link>
-
-      <div className="mt-8 grid gap-10 md:grid-cols-[0.9fr_1.1fr] md:gap-16">
-        <div className="relative h-80 overflow-hidden rounded-lg bg-[#E3F1F5] md:sticky md:top-24 md:h-[600px]">
-          {imageOk ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={product.imageUrl} alt={product.name} onError={() => setImageOk(false)} className="size-full object-cover" />
-          ) : (
-            <div className="grid size-full place-items-center text-7xl" aria-hidden="true">☕</div>
-          )}
-          {soldOut && <span className="absolute left-4 top-4 rounded bg-white px-3 py-2 text-sm font-bold text-[#C0392B]">Hết hàng</span>}
-        </div>
-
-        <section aria-label="Tùy chọn sản phẩm">
-          <p className="text-[10px] font-extrabold tracking-[0.25em] text-[#3FA7C9]">TÙY CHỈNH THỨC UỐNG</p>
-          <h1 className="mt-2 font-serif text-4xl font-medium text-[#1E6A86]">{product.name}</h1>
-          <p className="mt-3 leading-7 text-[#6A8792]">{product.description}</p>
-
-          <div className="my-6 flex items-center justify-between rounded-md bg-[#E3F1F5] px-4 py-3">
-            <span className="text-[#6A8792]">Giá cơ bản (size S)</span>
-            <strong className="text-lg text-[#1E6A86]">{formatVnd(product.price)}</strong>
-          </div>
-
-          <fieldset className="border-t border-[#D2E6EC] py-6">
-            <legend className="sr-only">Chọn kích cỡ</legend>
-            <div className="mb-3 flex items-center gap-2">
-              <h2 className="font-semibold">Chọn kích cỡ</h2>
-              <span className="rounded bg-[#D9EEF5] px-1.5 py-1 text-[9px] font-bold uppercase text-[#3FA7C9]">Bắt buộc</span>
-            </div>
-            {product.sizes.length === 0 ? (
-              <p className="text-sm text-[#C0392B]">Sản phẩm chưa có kích cỡ để chọn.</p>
-            ) : (
-              <div className="grid grid-cols-3 gap-3">
-                {product.sizes.map(s => (
-                  <button key={s.size} type="button" aria-pressed={size === s.size} onClick={() => { touch(); setSize(s.size); }} className={choice(size === s.size)}>
-                    <b>{s.size}</b>
-                    <span className="text-xs text-[#6A8792]">{formatVnd(s.price)}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </fieldset>
-
-          <fieldset className="border-t border-[#D2E6EC] py-6">
-            <legend className="sr-only">Thêm topping</legend>
-            <div className="mb-3 flex items-center gap-2">
-              <h2 className="font-semibold">Thêm topping</h2>
-              <small className="text-[#6A8792]">Tùy chọn · có thể chọn nhiều</small>
-            </div>
-            {product.toppings.length === 0 ? (
-              <p className="text-sm text-[#6A8792]">Món này không có topping.</p>
-            ) : (
-              <div className="grid gap-3 sm:grid-cols-2">
-                {product.toppings.map(t => {
-                  const on = toppingIds.includes(t.id);
-                  return (
-                    <button key={t.id} type="button" aria-pressed={on} onClick={() => toggleTopping(t.id)} className={choice(on)}>
-                      <span className="flex items-center gap-2">
-                        <span aria-hidden="true" className={`grid size-5 place-items-center rounded border text-xs ${on ? 'border-[#3FA7C9] bg-[#3FA7C9] text-white' : 'border-[#D2E6EC] text-transparent'}`}>✓</span>
-                        <b className="text-sm">{t.name}</b>
-                      </span>
-                      <span className="text-xs text-[#6A8792]">+{formatVnd(t.price)}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </fieldset>
-
-          <p className="flex items-center gap-2 border-t border-[#D2E6EC] pt-4 text-xs text-[#6A8792]">
-            <span aria-hidden="true" className={`size-2 rounded-full ${soldOut ? 'bg-[#B66148]' : 'bg-[#708C54]'}`} />
-            {soldOut ? 'Hết hàng' : `Còn ${product.stock} ly`} · Giá cuối cùng do hệ thống xác nhận khi đặt đơn.
-          </p>
-
-          <div className="sticky bottom-0 mt-4 flex gap-3 border-t border-[#D2E6EC] bg-[#F2F9FB]/95 py-4 backdrop-blur">
-            <div className="flex h-12 items-center overflow-hidden rounded-md border border-[#D2E6EC] bg-white">
-              <button type="button" aria-label="Giảm số lượng" disabled={qty <= 1} onClick={() => { touch(); setQty(q => q - 1); }} className="h-full w-11 text-xl text-[#4C8FA8] disabled:opacity-40">−</button>
-              <output aria-live="polite" className="w-8 text-center font-bold">{qty}</output>
-              <button type="button" aria-label="Tăng số lượng" disabled={qty >= maxQty} onClick={() => { touch(); setQty(q => q + 1); }} className="h-full w-11 text-xl text-[#4C8FA8] disabled:opacity-40">+</button>
-            </div>
-            <button type="button" onClick={submit} disabled={problem !== null} className="flex h-12 flex-1 items-center justify-between rounded-md bg-[#1E6A86] px-5 font-bold text-white transition hover:bg-[#2A7F9F] disabled:cursor-not-allowed disabled:bg-[#9db6bf] focus-visible:outline-2 focus-visible:outline-offset-2">
-              <span>{soldOut ? 'Hết hàng' : 'Thêm vào giỏ hàng'}</span>
-              <strong>{priced ? formatVnd(priced.lineTotal) : '—'}</strong>
-            </button>
-          </div>
-
-          {problem && !soldOut && <p className="text-sm text-[#C0392B]">{problem}</p>}
-          <p
-            role={feedback?.kind === 'error' ? 'alert' : 'status'}
-            aria-live="polite"
-            className={`min-h-5 text-sm ${feedback?.kind === 'error' ? 'text-[#C0392B]' : 'text-[#2E8B57]'}`}
+    <div>
+      {/* Dải tiêu đề nền Xanh Mint Pastel đồng bộ */}
+      <div className="border-b border-[#b5dcc0] bg-[#cbe8d3]/75">
+        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-3.5 text-xs font-bold">
+          <Link
+            href="/menu"
+            className="inline-flex items-center gap-1.5 text-[#4a2e20] transition hover:text-[#6d4c3d]"
           >
-            {feedback?.text ?? ''}
-            {feedback?.kind === 'ok' && <> <Link href="/cart" className="font-semibold underline underline-offset-4">Xem giỏ hàng</Link></>}
-          </p>
-        </section>
+            ← Quay lại thực đơn
+          </Link>
+          <Link
+            href="/cart"
+            className="rounded-full bg-[#6d4c3d] px-4 py-1.5 text-white transition hover:bg-[#563a2d]"
+          >
+            Đi tới giỏ hàng →
+          </Link>
+        </div>
       </div>
-    </main>
+
+      <main className="mx-auto max-w-6xl px-6 py-10 text-[#4a2e20]">
+        <div className="grid gap-8 md:grid-cols-[0.95fr_1.05fr] lg:gap-10">
+          {/* Khung ảnh màu kem cát (#efe5d4) chuẩn phong cách Mộc Vị */}
+          <div className="rounded-2xl border border-[#e2d2b8] bg-[#efe5d4] p-4 shadow-xs md:sticky md:top-28 md:self-start">
+            <div className="relative aspect-square overflow-hidden rounded-xl bg-white shadow-2xs">
+              {imageOk ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={product.imageUrl}
+                  alt={product.name}
+                  onError={() => setImageOk(false)}
+                  className="size-full object-cover"
+                />
+              ) : (
+                <div
+                  className="grid size-full place-items-center bg-[#cbe8d3]/40 text-7xl"
+                  aria-hidden="true"
+                >
+                  ☕
+                </div>
+              )}
+              <div className="absolute top-3 left-3 flex flex-wrap gap-2">
+                {soldOut ? (
+                  <span className="rounded-full border border-[#e5b8b8] bg-[#fbeaea] px-3.5 py-1 text-xs font-bold text-[#9b2c2c] shadow-xs">
+                    Hết hàng
+                  </span>
+                ) : (
+                  <span className="rounded-full bg-[#6d4c3d] px-3.5 py-1 text-xs font-bold text-white shadow-xs">
+                    Còn {product.stock} ly
+                  </span>
+                )}
+              </div>
+            </div>
+            <p className="mt-3 text-center text-xs font-bold text-[#6d4c3d]">
+              BrewLite Mộc Vị · Pha chế tươi mỗi ngày
+            </p>
+          </div>
+
+          <section
+            aria-label="Tùy chọn sản phẩm"
+            className="rounded-2xl border border-[#decbb4] bg-white p-6 shadow-xs sm:p-8"
+          >
+            <p className="eyebrow">BrewLite Mộc Vị / Tùy chỉnh thức uống</p>
+            <h1 className="mt-2 text-3xl font-extrabold tracking-tight text-[#4a2e20] sm:text-4xl">
+              {product.name}
+            </h1>
+            <p className="mt-2.5 text-sm leading-relaxed text-[#7a6254] sm:text-base">
+              {product.description}
+            </p>
+
+            <div className="my-6 flex items-center justify-between rounded-xl border border-[#e2d2b8] bg-[#efe5d4] px-4 py-3.5">
+              <span className="text-sm font-semibold text-[#6d4c3d]">Giá cơ bản (size S)</span>
+              <strong className="text-lg font-extrabold text-[#4a2e20]">
+                {formatVnd(product.price)}
+              </strong>
+            </div>
+
+            <fieldset className="border-t border-[#decbb4]/80 py-5">
+              <legend className="sr-only">Chọn kích cỡ</legend>
+              <div className="mb-3 flex items-center justify-between">
+                <h2 className="text-sm font-extrabold text-[#4a2e20]">Chọn kích cỡ</h2>
+                <span className="rounded-full bg-[#cbe8d3] px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-[#2d6a4f]">
+                  Bắt buộc
+                </span>
+              </div>
+              {product.sizes.length === 0 ? (
+                <p className="text-sm text-[#9b2c2c]">Sản phẩm chưa có kích cỡ để chọn.</p>
+              ) : (
+                <div className="grid grid-cols-3 gap-3">
+                  {product.sizes.map((s) => (
+                    <button
+                      key={s.size}
+                      type="button"
+                      aria-pressed={size === s.size}
+                      onClick={() => {
+                        touch();
+                        setSize(s.size);
+                      }}
+                      className={choice(size === s.size)}
+                    >
+                      <b className="text-sm">Size {s.size}</b>
+                      <span className="text-xs font-semibold text-[#6d4c3d]">
+                        {formatVnd(s.price)}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </fieldset>
+
+            <fieldset className="border-t border-[#decbb4]/80 py-5">
+              <legend className="sr-only">Thêm topping</legend>
+              <div className="mb-3 flex items-center justify-between">
+                <h2 className="text-sm font-extrabold text-[#4a2e20]">Thêm topping</h2>
+                <small className="text-xs text-[#7a6254]">Tùy chọn · có thể chọn nhiều</small>
+              </div>
+              {product.toppings.length === 0 ? (
+                <p className="text-sm text-[#7a6254]">Món này không có topping.</p>
+              ) : (
+                <div className="grid gap-2.5 sm:grid-cols-2">
+                  {product.toppings.map((t) => {
+                    const on = toppingIds.includes(t.id);
+                    return (
+                      <button
+                        key={t.id}
+                        type="button"
+                        aria-pressed={on}
+                        onClick={() => toggleTopping(t.id)}
+                        className={choice(on)}
+                      >
+                        <span className="flex items-center gap-2.5">
+                          <span
+                            aria-hidden="true"
+                            className={`grid size-5 place-items-center rounded-md border text-xs font-bold transition ${
+                              on
+                                ? 'border-[#6d4c3d] bg-[#6d4c3d] text-white'
+                                : 'border-[#decbb4] bg-white text-transparent'
+                            }`}
+                          >
+                            ✓
+                          </span>
+                          <b className="text-sm">{t.name}</b>
+                        </span>
+                        <span className="text-xs font-semibold text-[#6d4c3d]">
+                          +{formatVnd(t.price)}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </fieldset>
+
+            <p className="flex items-center gap-2 border-t border-[#decbb4]/80 pt-4 text-xs text-[#7a6254]">
+              <span
+                aria-hidden="true"
+                className={`size-2 rounded-full ${soldOut ? 'bg-[#9b2c2c]' : 'bg-[#2d6a4f]'}`}
+              />
+              {soldOut ? 'Hết hàng' : `Còn ${product.stock} ly`} · Giá cuối cùng do hệ thống xác nhận khi đặt đơn.
+            </p>
+
+            <div className="mt-5 flex flex-col gap-3 border-t border-[#decbb4]/80 pt-5 sm:flex-row">
+              <div className="flex h-12 items-center justify-between overflow-hidden rounded-full border-2 border-[#6d4c3d] bg-[#faf6ec] px-1 sm:w-36">
+                <button
+                  type="button"
+                  aria-label="Giảm số lượng"
+                  disabled={qty <= 1}
+                  onClick={() => {
+                    touch();
+                    setQty((q) => q - 1);
+                  }}
+                  className="h-9 w-9 rounded-full text-xl font-bold text-[#4a2e20] transition hover:bg-[#efe5d4] disabled:opacity-40"
+                >
+                  −
+                </button>
+                <output
+                  aria-live="polite"
+                  className="w-10 text-center text-base font-extrabold text-[#4a2e20]"
+                >
+                  {qty}
+                </output>
+                <button
+                  type="button"
+                  aria-label="Tăng số lượng"
+                  disabled={qty >= maxQty}
+                  onClick={() => {
+                    touch();
+                    setQty((q) => q + 1);
+                  }}
+                  className="h-9 w-9 rounded-full text-xl font-bold text-[#4a2e20] transition hover:bg-[#efe5d4] disabled:opacity-40"
+                >
+                  +
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={submit}
+                disabled={problem !== null}
+                className="flex h-12 flex-1 items-center justify-between rounded-full bg-[#6d4c3d] px-6 text-sm font-bold text-white shadow-xs transition hover:bg-[#563a2d] disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2"
+              >
+                <span>{soldOut ? 'Hết hàng' : 'Thêm vào giỏ hàng'}</span>
+                <strong className="text-base">{priced ? formatVnd(priced.lineTotal) : '—'}</strong>
+              </button>
+            </div>
+
+            {problem && !soldOut && (
+              <p className="mt-3 text-sm font-medium text-[#9b2c2c]">{problem}</p>
+            )}
+
+            <div
+              role={feedback?.kind === 'error' ? 'alert' : 'status'}
+              aria-live="polite"
+              className="mt-3 min-h-6"
+            >
+              {feedback && (
+                <div
+                  className={`flex flex-wrap items-center justify-between gap-2 rounded-2xl border px-4 py-3 text-sm font-semibold ${
+                    feedback.kind === 'error'
+                      ? 'border-[#e5b8b8] bg-[#fbeaea] text-[#9b2c2c]'
+                      : 'border-[#9ecfb0] bg-[#cbe8d3]/65 text-[#2d6a4f]'
+                  }`}
+                >
+                  <span>{feedback.text}</span>
+                  {feedback.kind === 'ok' && (
+                    <Link
+                      href="/cart"
+                      className="rounded-full bg-[#6d4c3d] px-4 py-1.5 text-xs font-bold text-white transition hover:bg-[#563a2d]"
+                    >
+                      Xem giỏ hàng →
+                    </Link>
+                  )}
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
   );
 }

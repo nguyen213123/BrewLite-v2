@@ -1,14 +1,14 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 .brewlite-payment-page {
-  --espresso: #4a2c11;
-  --espresso-hover: #633d1a;
-  --caramel: #c87d55;
-  --paper: #faf7f2;
+  --espresso: #6d4c3d;
+  --espresso-hover: #563a2d;
+  --caramel: #4d8b55;
+  --paper: #faf6ec;
   --surface: #ffffff;
-  --border: #e6dfd5;
-  --ink: #1c1917;
-  --muted: #78716c;
+  --border: #decbb4;
+  --ink: #4a2e20;
+  --muted: #7a6254;
   --green: #059669;
   --green-bg: #ecfdf5;
   --green-border: #a7f3d0;

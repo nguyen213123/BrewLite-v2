@@ -15,14 +15,16 @@ interface Result {
 
 function MenuSkeleton() {
   return (
-    <ul className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3" aria-hidden="true">
+    <ul className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3" aria-hidden="true">
       {Array.from({ length: 6 }, (_, index) => (
-        <li key={index} className="animate-pulse overflow-hidden rounded-2xl border border-brew-line bg-white/60">
-          <div className="aspect-[4/3] bg-brew-line/60" />
-          <div className="space-y-3 p-4">
-            <div className="h-5 w-2/3 rounded bg-brew-line/60" />
-            <div className="h-4 w-full rounded bg-brew-line/40" />
-            <div className="h-5 w-1/3 rounded bg-brew-line/60" />
+        <li
+          key={index}
+          className="animate-pulse overflow-hidden rounded-2xl border border-[#e2d2b8] bg-[#efe5d4] p-3.5"
+        >
+          <div className="aspect-square rounded-xl bg-white/70" />
+          <div className="space-y-2.5 pt-4 pb-2">
+            <div className="mx-auto h-4 w-2/3 rounded bg-[#decbb4]" />
+            <div className="mx-auto h-3 w-4/5 rounded bg-[#decbb4]/70" />
           </div>
         </li>
       ))}
@@ -61,13 +63,13 @@ export function MenuGrid() {
 
   if (result.error || !result.data) {
     return (
-      <div role="alert" className="rounded-2xl border border-brew-danger/30 bg-brew-danger-bg p-6">
-        <h2 className="text-lg font-semibold text-brew-danger">Không tải được menu</h2>
-        <p className="mt-2 text-sm">{result.error || 'Đã xảy ra lỗi không mong muốn.'}</p>
+      <div role="alert" className="rounded-2xl border border-[#e5b8b8] bg-[#fbeaea] p-6 text-center text-[#9b2c2c]">
+        <h2 className="text-lg font-bold">Không tải được menu</h2>
+        <p className="mt-1.5 text-sm">{result.error || 'Đã xảy ra lỗi không mong muốn.'}</p>
         <button
           type="button"
           onClick={() => setAttempt((value) => value + 1)}
-          className="mt-4 rounded-lg bg-brew-ink px-5 py-3 font-semibold text-white hover:bg-brew-ink-hover focus-visible:outline-2 focus-visible:outline-offset-4"
+          className="mt-4 rounded-full bg-[#6d4c3d] px-6 py-2.5 text-xs font-bold text-white transition hover:bg-[#563a2d] focus-visible:outline-2 focus-visible:outline-offset-4"
         >
           Thử lại
         </button>
@@ -80,16 +82,18 @@ export function MenuGrid() {
   if (products.length === 0) {
     const pastEnd = meta.total > 0 && page > 1;
     return (
-      <div className="rounded-2xl border border-brew-line bg-white/60 p-8 text-center" role="status">
-        <h2 className="text-lg font-semibold">{pastEnd ? 'Trang này không có sản phẩm' : 'Menu đang trống'}</h2>
-        <p className="mt-2 text-sm text-brew-muted">
+      <div className="rounded-2xl border border-dashed border-[#decbb4] bg-[#efe5d4]/60 p-10 text-center" role="status">
+        <h2 className="text-lg font-bold text-[#4a2e20]">
+          {pastEnd ? 'Trang này không có sản phẩm' : 'Menu đang trống'}
+        </h2>
+        <p className="mt-2 text-sm text-[#7a6254]">
           {pastEnd ? 'Hãy quay lại trang đầu của menu.' : 'Hiện chưa có đồ uống nào. Vui lòng quay lại sau.'}
         </p>
         {pastEnd && (
           <button
             type="button"
             onClick={() => setPage(1)}
-            className="mt-4 rounded-lg bg-brew-ink px-5 py-3 font-semibold text-white hover:bg-brew-ink-hover focus-visible:outline-2 focus-visible:outline-offset-4"
+            className="mt-4 rounded-full bg-[#6d4c3d] px-6 py-2.5 text-xs font-bold text-white transition hover:bg-[#563a2d] focus-visible:outline-2 focus-visible:outline-offset-4"
           >
             Về trang đầu
           </button>
@@ -100,7 +104,7 @@ export function MenuGrid() {
 
   return (
     <div>
-      <ul className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+      <ul className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
         {products.map((product) => (
           <li key={product.id} className="flex">
             <ProductCard product={product} />
@@ -109,23 +113,31 @@ export function MenuGrid() {
       </ul>
 
       {meta.totalPages > 1 && (
-        <nav className="mt-8 flex items-center justify-center gap-4" aria-label="Phân trang menu">
+        <nav
+          className="mt-10 flex items-center justify-center gap-4"
+          aria-label="Phân trang menu"
+        >
           <button
             type="button"
             onClick={() => setPage((value) => Math.max(1, value - 1))}
             disabled={page <= 1}
-            className="rounded-lg border border-brew-ink px-4 py-2 font-semibold disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-offset-4"
+            className="rounded-full border-2 border-[#6d4c3d] bg-white px-5 py-2 text-xs font-bold text-[#4a2e20] transition hover:bg-[#6d4c3d] hover:text-white disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-offset-4"
           >
-            Trang trước
+            ← Trang trước
           </button>
-          <span className="text-sm" aria-live="polite">Trang {meta.page} / {meta.totalPages}</span>
+          <span
+            className="rounded-full bg-[#efe5d4] px-4 py-2 text-xs font-bold text-[#4a2e20]"
+            aria-live="polite"
+          >
+            Trang {meta.page} / {meta.totalPages}
+          </span>
           <button
             type="button"
             onClick={() => setPage((value) => Math.min(meta.totalPages, value + 1))}
             disabled={page >= meta.totalPages}
-            className="rounded-lg border border-brew-ink px-4 py-2 font-semibold disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-offset-4"
+            className="rounded-full border-2 border-[#6d4c3d] bg-white px-5 py-2 text-xs font-bold text-[#4a2e20] transition hover:bg-[#6d4c3d] hover:text-white disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-offset-4"
           >
-            Trang sau
+            Trang sau →
           </button>
         </nav>
       )}

@@ -1,36 +1,211 @@
 @import "tailwindcss";
 
-/* Bảng màu BrewLite: lấy từ trang khởi đầu của khung dự án (nền kem, chữ/nút xanh rêu, viền xám xanh). */
+/* Bảng màu BrewLite Mộc Vị: Xanh Mint Pastel (#cbe8d3), Kem Cát (#faf6ec / #efe5d4) & Nâu Cà Phê Trầm (#6d4c3d / #4a2e20) */
 @theme {
-  --color-brew-bg: #f7f4ed;
-  --color-brew-ink: #263c30;
-  --color-brew-ink-hover: #1b2b22;
-  --color-brew-muted: #566b5e;
-  --color-brew-line: #cdd5c8;
+  --color-brew-bg: #faf6ec;
+  --color-brew-mint: #cbe8d3;
+  --color-brew-mint-soft: #dff2e4;
+  --color-brew-sand: #efe5d4;
+  --color-brew-surface: #ffffff;
+  --color-brew-surface-soft: #f7f0e2;
+  --color-brew-ink: #4a2e20;
+  --color-brew-ink-hover: #382115;
+  --color-brew-primary: #6d4c3d;
+  --color-brew-primary-hover: #563a2d;
+  --color-brew-muted: #7a6254;
+  --color-brew-line: #decbb4;
+  --color-brew-accent: #4d8b55;
+  --color-brew-accent-bg: #dff2e4;
   --color-brew-danger: #9b2c2c;
   --color-brew-danger-bg: #fbeaea;
-  --color-brew-ok-bg: #e7f0e4;
+  --color-brew-ok: #2d6a4f;
+  --color-brew-ok-bg: #dff2e4;
 }
 
-.shop { max-width: 1040px; margin: auto; padding: 48px 24px; color: #263c30; }
-.shop h1 { font-size: clamp(2rem, 5vw, 3.4rem); font-weight: 700; margin-bottom: 16px; }
-.shop h2 { font-size: 1.25rem; font-weight: 650; margin-bottom: 12px; }
-.shop p, .shop ul { margin: 16px 0; line-height: 1.7; }
-.shop li { margin-bottom: 8px; }
-.shop a { text-decoration: underline; text-underline-offset: 4px; }
-.shop-panel { border: 1px solid #cdd5c8; background: #fff; border-radius: 20px; padding: 24px; margin: 24px 0; }
-.shop-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 24px; }
-.shop-grid .shop-panel { margin: 0; }
-.shop-photo { width: 100%; height: 180px; object-fit: cover; border-radius: 12px; margin-bottom: 16px; }
-.shop label { display: block; margin: 16px 0; }
-.shop input:not([type=checkbox]), .shop select { border: 1px solid #86968a; padding: 10px; border-radius: 8px; max-width: 100%; margin-left: 8px; }
-.shop button, .shop .shop-action { display: inline-block; border-radius: 8px; padding: 12px 18px; background: #263c30; color: white; margin: 8px 8px 8px 0; cursor: pointer; }
-.shop button:disabled { opacity: .5; cursor: not-allowed; }
-.shop button:focus-visible, .shop a:focus-visible { outline: 3px solid #a45b27; outline-offset: 3px; }
-.shop-error { background: #fff0eb; border: 1px solid #b65738; padding: 16px; border-radius: 12px; }
-.eyebrow { text-transform: uppercase; letter-spacing: .18em; font-size: .75rem; }
-@media (max-width: 640px) { header > div { flex-wrap: wrap; gap: 12px; } header nav { flex-wrap: wrap; } .shop { padding: 28px 16px; }  .shop button, .shop .shop-action { min-height: 44px; width: 100%; margin-right: 0; text-align: center; } .shop label { display: flex; flex-direction: column; gap: 6px; } .shop input:not([type=checkbox]), .shop select { margin-left: 0; width: 100%; min-height: 44px; } .shop-panel { padding: 16px; border-radius: 16px; } }
+.shop {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 40px 24px 64px;
+  color: #4a2e20;
+}
 
-:root { color-scheme: light; }
-body { margin: 0; background: #f7f4ed; color: #263c30; font-family: Arial, Helvetica, sans-serif; }
-button, a { -webkit-tap-highlight-color: transparent; }
+.shop h1 {
+  font-size: clamp(1.875rem, 3.5vw, 2.5rem);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  margin-bottom: 8px;
+  color: #4a2e20;
+}
+
+.shop h2 {
+  font-size: 1.15rem;
+  font-weight: 700;
+  margin-bottom: 12px;
+  color: #4a2e20;
+}
+
+.shop p,
+.shop ul {
+  margin: 12px 0;
+  line-height: 1.65;
+}
+
+.shop li {
+  margin-bottom: 8px;
+}
+
+.shop-panel {
+  border: 1px solid #decbb4;
+  background: #ffffff;
+  border-radius: 20px;
+  padding: 24px;
+  margin: 20px 0;
+  box-shadow: 0 4px 14px rgba(74, 46, 32, 0.05);
+}
+
+.shop-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 24px;
+}
+
+.shop-grid .shop-panel {
+  margin: 0;
+}
+
+.shop-photo {
+  width: 100%;
+  height: 180px;
+  object-fit: cover;
+  border-radius: 14px;
+  margin-bottom: 16px;
+}
+
+.shop label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 14px 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #4a2e20;
+}
+
+.shop input:not([type=checkbox]),
+.shop select {
+  border: 1px solid #decbb4;
+  background-color: #faf6ec;
+  color: #4a2e20;
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  max-width: 100%;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+}
+
+.shop input:not([type=checkbox]):focus,
+.shop select:focus {
+  outline: none;
+  border-color: #6d4c3d;
+  background-color: #ffffff;
+  box-shadow: 0 0 0 2px rgba(109, 76, 61, 0.18);
+}
+
+.shop input:disabled,
+.shop select:disabled {
+  opacity: 0.65;
+  background-color: #efe5d4;
+  cursor: not-allowed;
+}
+
+.shop button,
+.shop .shop-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: 9999px;
+  padding: 11px 22px;
+  background: #6d4c3d;
+  color: #ffffff;
+  font-size: 0.875rem;
+  font-weight: 700;
+  margin: 6px 8px 6px 0;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background-color 0.15s ease, transform 0.1s ease, opacity 0.15s ease;
+}
+
+.shop button:hover:not(:disabled),
+.shop .shop-action:hover {
+  background: #563a2d;
+}
+
+.shop button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.shop button:focus-visible,
+.shop a:focus-visible {
+  outline: 2px solid #4d8b55;
+  outline-offset: 2px;
+}
+
+.shop-error {
+  background: #fbeaea;
+  border: 1px solid #e5b8b8;
+  color: #9b2c2c;
+  padding: 16px 20px;
+  border-radius: 16px;
+  font-size: 0.875rem;
+}
+
+.eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #6d4c3d;
+}
+
+@media (max-width: 640px) {
+  .shop {
+    padding: 24px 16px 48px;
+  }
+  .shop button,
+  .shop .shop-action {
+    min-height: 44px;
+    width: 100%;
+    margin-right: 0;
+    text-align: center;
+  }
+  .shop input:not([type=checkbox]),
+  .shop select {
+    width: 100%;
+    min-height: 44px;
+  }
+  .shop-panel {
+    padding: 18px;
+    border-radius: 16px;
+  }
+}
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  margin: 0;
+  background: #faf6ec;
+  color: #4a2e20;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
