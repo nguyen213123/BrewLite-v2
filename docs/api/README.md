@@ -2,7 +2,7 @@
 
 Base URL local: `http://localhost:3001/api`. JSON UTF-8. CORS mặc định cho `http://localhost:3000`.
 
-## Endpoint đã triển khai
+## Health endpoints
 
 | Method | Endpoint | Thành công | Thất bại |
 | --- | --- | --- | --- |
@@ -21,7 +21,7 @@ ValidationPipe đã bật `whitelist`, `forbidNonWhitelisted`, `transform`. Thà
 - [ERD](../diagrams/erd.md), [schema Prisma tham chiếu](../diagrams/schema.prisma): quan hệ, ràng buộc, index và chủ bảng.
 - [Bàn giao cho nhóm](../requirements/team-handoff.md): issue của từng thành viên, dịch vụ cần cung cấp và thứ tự merge.
 
-Hai health endpoint có logic thật. Khung API hiện đã mount các route/DTO/guard theo OpenAPI; service chưa triển khai trả 501 FEATURE_NOT_IMPLEMENTED, không trả success giả. Xem [hướng dẫn skeleton](skeleton.md) để nhận thư mục, port và chạy test. Success JSON trong fixture vẫn là mục tiêu phải triển khai tiếp.
+Trạng thái 26/10/2026: toàn bộ 17 operation trong OpenAPI đã có implementation, gồm catalog, JWT, quote/create/history/cancel/STAFF status, payment, promotion và loyalty. Dữ liệu nghiệp vụ lưu trên PostgreSQL; gateway thanh toán là mock theo phạm vi MVP. Xem [hướng dẫn module](skeleton.md) và [kết quả nghiệm thu](../qa/final/README.md). Response 501 còn trong contract/fixture để tham chiếu giai đoạn skeleton cũ, không phải kết quả mong đợi của các route đã tích hợp.
 
 ## Quy ước chung
 
@@ -62,7 +62,7 @@ Hai health endpoint có logic thật. Khung API hiện đã mount các route/DTO
 | 422 | PRODUCT_UNAVAILABLE / INVALID_PRODUCT_OPTION | Product ngừng bán hoặc size/topping không hợp lệ |
 | 422 | PROMOTION_INVALID | Mã sai, ngoài thời gian hoặc chưa đủ điều kiện |
 | 500 | INTERNAL_ERROR | Lỗi ngoài dự kiến, không lộ SQL/stack/secret |
-| 501 | FEATURE_NOT_IMPLEMENTED | Tạm thời: service nghiệp vụ hoặc xác minh IdentityPort chưa triển khai trong skeleton |
+| 501 | FEATURE_NOT_IMPLEMENTED | Legacy skeleton; không phải hành vi nghiệm thu của runtime hiện tại |
 
 details luôn là mảng (có thể rỗng). Client xử lý theo code, không parse message. Exception filter và ValidationPipe exceptionFactory dùng chung đã có trong skeleton; TV4 tiếp tục dùng khi hoàn thiện auth. `/health/ready` giữ nguyên lỗi legacy 503 có statusCode/message/error như OpenAPI. Các route không tồn tại dùng framework code NOT_FOUND, không phải ORDER_NOT_FOUND của service nghiệp vụ.
 

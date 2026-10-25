@@ -73,7 +73,7 @@ TV3 sở hữu hàm chuyển trạng thái và transaction của đơn hàng. TV
 7. **Ưu đãi:** một mã FIXED/PERCENT mỗi đơn, server làm tròn xuống; cộng/đảo điểm đúng một lần; không dùng điểm giảm tiền ở MVP.
 8. **Schema/migration:** mỗi thay đổi dùng chung phải được review; phối hợp thứ tự migration để tránh xung đột.
 
-API/JSON đã được đặc tả trong OpenAPI v1.0.0, kèm quote, promo validate, loyalty và endpoint STAFF để test State Machine mà không yêu cầu UI barista. Runtime hiện chỉ có health; TV1–TV5 triển khai các endpoint theo baseline này.
+API/JSON được đặc tả trong OpenAPI v1.0.0, kèm quote, promo validate, loyalty và endpoint STAFF để test State Machine mà không yêu cầu UI barista. Main đã hiện thực các endpoint và nối các module với PostgreSQL; gateway thanh toán vẫn mock theo bài tập. Kết quả hiện tại nằm trong [hồ sơ nghiệm thu](../qa/final/README.md).
 
 ## 6. Kế hoạch theo giai đoạn
 
@@ -118,4 +118,4 @@ Trong khi chờ API, frontend có thể dùng fixture đúng hợp đồng. Tiê
 
 Repository chạy được theo README; Compose và dữ liệu mẫu; ERD và luồng nghiệp vụ; hợp đồng API; backlog và tài liệu sprint; bằng chứng commit/PR/review; kết quả kiểm thử; kịch bản demo thành công, thất bại, xử lý lặp và tranh chấp tồn kho.
 
-**Trạng thái:** khung và 16 issue đã được tạo trên nguyen213123/BrewLite-v2. Khung API đã bổ sung route/DTO/guard/port và schema/migration nền theo ERD; các service nghiệp vụ vẫn là stub 501. Bước tiếp theo là review/merge các PR nền, gán TV1–TV5 bằng tên thật và làm theo team-handoff.md cùng docs/api/skeleton.md. Không coi chức năng đã hoàn thành chỉ vì route hoặc type đã có.
+**Trạng thái ngày 26/10/2026:** main đã tích hợp catalog/detail, menu/cart, JWT, quote/create, kho, State Machine, payment/idempotency, history, promotion và loyalty. Backend dùng PostgreSQL thật; gateway mock là phạm vi MVP, không phải service nghiệp vụ stub. [Hồ sơ nghiệm thu](../qa/final/README.md) ghi test, demo và latency. Issue #16 còn chờ người khác chạy từ clone mới và xác nhận sprint/demo thực tế; không suy ra các xác nhận này từ CI hoặc tự tạo lịch sử review. [Bàn giao nhóm](team-handoff.md) giữ ranh giới sở hữu module và các quyết định baseline.

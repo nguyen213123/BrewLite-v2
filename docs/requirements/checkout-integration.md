@@ -51,4 +51,4 @@ Bổ sung hồi quy ngày 25/10/2026 cho PR #31: sau khi POST có thể đã com
 - `npm run test:db`: database tạm độc lập; seed hai lần kiểm tra số bản ghi, real HTTP auth/catalog/quote/create/payment/cancel, kho/promo/ledger rollback và 10 create tranh stock cuối.
 - CI hiện chạy `npm test` với PostgreSQL và RUN_DB_TESTS=1, vì vậy test frontend mới cũng chạy trong CI.
 
-Giới hạn: thanh toán mô phỏng; session checkout thuộc tab và không phải cơ chế đồng bộ nhiều tab. Không tự hết hạn đơn PENDING. Chưa có kiểm thử hiệu năng <500ms hoặc UI barista (không thuộc MVP).
+Giới hạn: thanh toán mô phỏng; session checkout thuộc tab và không phải cơ chế đồng bộ nhiều tab. Không tự hết hạn đơn PENDING. Không có UI barista (không thuộc MVP). Các số liệu/test phía trên là lịch sử của PR #31; kết quả hiện tại và phép đo hiệu năng local nằm trong [hồ sơ nghiệm thu](../qa/final/README.md), không phải cam kết tải public.

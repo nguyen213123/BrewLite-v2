@@ -1,0 +1,174 @@
+{
+  "measuredAt": "2026-10-25T17:16:18.026Z",
+  "commit": "0eed8fe258c5266f73e40ee3c47640cb4f00a22b",
+  "environment": {
+    "node": "v24.21.0",
+    "platform": "win32",
+    "cpu": "12th Gen Intel(R) Core(TM) i7-1265U",
+    "logicalCpus": 12,
+    "ramGiB": 15,
+    "backend": "NestJS production Docker",
+    "database": "PostgreSQL 17 Docker tmpfs",
+    "api": "http://localhost:3401/api"
+  },
+  "dataset": "17 products, 51 sizes, 5 toppings, 85 links, 3 promotions; isolated benchmark account/orders",
+  "method": "HTTP round trip through body parse; warm-up excluded; 50 samples per read/quote/promo endpoint at c=1 and c=5; login 10, create/pay/cancel 20 each at c=1",
+  "limits": "Local small dataset, not a public deployment/load guarantee. Register/STAFF/lock timeouts excluded. Artifacts contain no token/password.",
+  "metrics": [
+    {
+      "endpoint": "GET /products?page=1&limit=12 c=1",
+      "n": 50,
+      "p50": 3.15,
+      "p95": 5.77,
+      "max": 6.99
+    },
+    {
+      "endpoint": "GET /products/:productId c=1",
+      "n": 50,
+      "p50": 3.7,
+      "p95": 4.77,
+      "max": 5.31
+    },
+    {
+      "endpoint": "GET /auth/me c=1",
+      "n": 50,
+      "p50": 3.04,
+      "p95": 3.94,
+      "max": 4.78
+    },
+    {
+      "endpoint": "GET /orders/me?page=1&limit=10 c=1",
+      "n": 50,
+      "p50": 3.32,
+      "p95": 4.23,
+      "max": 4.8
+    },
+    {
+      "endpoint": "GET /orders/:orderId c=1",
+      "n": 50,
+      "p50": 3.74,
+      "p95": 5.15,
+      "max": 7.4
+    },
+    {
+      "endpoint": "GET /loyalty/me c=1",
+      "n": 50,
+      "p50": 2.68,
+      "p95": 4.45,
+      "max": 5.26
+    },
+    {
+      "endpoint": "GET /loyalty/me/entries c=1",
+      "n": 50,
+      "p50": 3.31,
+      "p95": 4.36,
+      "max": 4.91
+    },
+    {
+      "endpoint": "POST /orders/quote c=1",
+      "n": 50,
+      "p50": 5.48,
+      "p95": 8.56,
+      "max": 13.62
+    },
+    {
+      "endpoint": "POST /promotions/validate c=1",
+      "n": 50,
+      "p50": 5.48,
+      "p95": 7.27,
+      "max": 7.76
+    },
+    {
+      "endpoint": "GET /products?page=1&limit=12 c=5",
+      "n": 50,
+      "p50": 6.73,
+      "p95": 26.32,
+      "max": 32.21
+    },
+    {
+      "endpoint": "GET /products/:productId c=5",
+      "n": 50,
+      "p50": 8.52,
+      "p95": 13.83,
+      "max": 19.58
+    },
+    {
+      "endpoint": "GET /auth/me c=5",
+      "n": 50,
+      "p50": 7.68,
+      "p95": 11.51,
+      "max": 12.46
+    },
+    {
+      "endpoint": "GET /orders/me?page=1&limit=10 c=5",
+      "n": 50,
+      "p50": 6.75,
+      "p95": 10.26,
+      "max": 12.07
+    },
+    {
+      "endpoint": "GET /orders/:orderId c=5",
+      "n": 50,
+      "p50": 9.17,
+      "p95": 22.72,
+      "max": 22.76
+    },
+    {
+      "endpoint": "GET /loyalty/me c=5",
+      "n": 50,
+      "p50": 11.25,
+      "p95": 21.89,
+      "max": 24.46
+    },
+    {
+      "endpoint": "GET /loyalty/me/entries c=5",
+      "n": 50,
+      "p50": 7.27,
+      "p95": 10.24,
+      "max": 10.75
+    },
+    {
+      "endpoint": "POST /orders/quote c=5",
+      "n": 50,
+      "p50": 15.96,
+      "p95": 20.91,
+      "max": 24.94
+    },
+    {
+      "endpoint": "POST /promotions/validate c=5",
+      "n": 50,
+      "p50": 17.44,
+      "p95": 23.24,
+      "max": 25.3
+    },
+    {
+      "endpoint": "POST /auth/login c=1",
+      "n": 10,
+      "p50": 202.84,
+      "p95": 235.44,
+      "max": 235.44
+    },
+    {
+      "endpoint": "POST /orders c=1",
+      "n": 20,
+      "p50": 11.67,
+      "p95": 16.15,
+      "max": 16.18
+    },
+    {
+      "endpoint": "POST /payments c=1",
+      "n": 20,
+      "p50": 11.81,
+      "p95": 18.21,
+      "max": 23.44
+    },
+    {
+      "endpoint": "POST /orders/:id/cancel c=1",
+      "n": 20,
+      "p50": 11.39,
+      "p95": 17.25,
+      "max": 24.87
+    }
+  ],
+  "p95Under500ms": true
+}
