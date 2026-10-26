@@ -90,6 +90,8 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
+  const [confirmCancel, setConfirmCancel] = useState(false);
+  const [cancelSuccess, setCancelSuccess] = useState(false);
   const [refreshToken, setRefreshToken] = useState(0);
 
   useEffect(() => {
@@ -152,6 +154,31 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
       setOrder(updated);
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Không thể cập nhật trạng thái đơn.');
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function handleCancelOrder() {
+    if (!order || actionBusy) return;
+    setActionBusy(true);
+    setActionError(null);
+    try {
+      const updated = await apiFetch<Order>(`/orders/${order.id}/cancel`, {
+        method: 'POST',
+        body: JSON.stringify({ expectedVersion: order.version }),
+      });
+      setOrder(updated);
+      setCancelSuccess(true);
+      setConfirmCancel(false);
+      if (user?.role === 'CUSTOMER') {
+        try {
+          const bal = await apiGet<LoyaltyBalance>('/loyalty/me');
+          updateUserPoints(bal.points);
+        } catch {}
+      }
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Không thể hủy đơn hàng.');
     } finally {
       setActionBusy(false);
     }
@@ -252,6 +279,21 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
 
             <StatusAlert status={order.status} />
 
+            {cancelSuccess && (
+              <div
+                role="status"
+                className="flex items-center justify-between rounded-xl border border-[#b5dcc0] bg-[#eef7f0] p-4 text-xs font-bold text-[#2d6a4f]"
+              >
+                <span>✓ Đơn hàng đã được hủy thành công. Tồn kho và mã ưu đãi đã được hoàn trả.</span>
+                <Link
+                  href="/menu"
+                  className="rounded-full bg-[#2d6a4f] px-4 py-1.5 text-xs font-bold text-white transition hover:bg-[#1b4332]"
+                >
+                  Đặt món mới →
+                </Link>
+              </div>
+            )}
+
             {actionError && (
               <div
                 role="alert"
@@ -261,31 +303,107 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
               </div>
             )}
 
-            <div className="flex flex-wrap items-center gap-3">
-              {['PENDING', 'PAYMENT_FAILED', 'PAID'].includes(order.status) && (
-                <Link
-                  href={`/checkout?orderId=${order.id}`}
-                  className="inline-flex items-center gap-2 rounded-full bg-[#6d4c3d] px-6 py-3 text-xs font-bold text-white shadow-xs transition hover:bg-[#563a2d]"
-                >
-                  <span>
-                    {order.status === 'PAID'
-                      ? 'Quản lý thanh toán / hủy trước pha chế'
-                      : 'Tiếp tục thanh toán / hủy đơn'}
-                  </span>
-                  <span aria-hidden="true">→</span>
-                </Link>
-              )}
+            {confirmCancel && (
+              <div
+                role="alert"
+                className="space-y-3 rounded-2xl border-2 border-[#e5b8b8] bg-[#fbeaea] p-5 shadow-sm"
+              >
+                <div className="flex items-start gap-3">
+                  <span className="text-xl">⚠️</span>
+                  <div>
+                    <h3 className="m-0 text-sm font-extrabold text-[#9b2c2c]">
+                      Xác nhận hủy đơn hàng {order.code}?
+                    </h3>
+                    <p className="m-0 mt-1 text-xs text-[#7a6254]">
+                      {order.status === 'PAID'
+                        ? 'Đơn hàng chưa bắt đầu pha chế. Khi hủy, hệ thống sẽ tự động hoàn trả thanh toán mô phỏng, hoàn tồn kho, hoàn lượt mã khuyến mãi và đảo điểm thưởng Loyalty.'
+                        : 'Hàng trong kho và mã ưu đãi đã giữ sẽ được hoàn trả lại ngay lập tức.'}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2 pt-1">
+                  <button
+                    type="button"
+                    disabled={actionBusy}
+                    onClick={handleCancelOrder}
+                    className="rounded-full bg-[#9b2c2c] px-5 py-2 text-xs font-bold text-white shadow-xs transition hover:bg-[#7a2222] disabled:opacity-50"
+                  >
+                    {actionBusy ? 'Đang hủy đơn…' : 'Đồng ý hủy đơn'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={actionBusy}
+                    onClick={() => setConfirmCancel(false)}
+                    className="rounded-full border border-[#decbb4] bg-white px-5 py-2 text-xs font-bold text-[#4a2e20] transition hover:bg-gray-50"
+                  >
+                    Không, giữ lại đơn
+                  </button>
+                </div>
+              </div>
+            )}
 
-              {staffTransition && (
-                <button
-                  type="button"
-                  disabled={actionBusy}
-                  onClick={() => handleStaffTransition(staffTransition.next)}
-                  className="inline-flex items-center gap-2 rounded-full border-2 border-[#6d4c3d] bg-[#cbe8d3] px-5 py-2.5 text-xs font-bold text-[#4a2e20] transition hover:bg-[#6d4c3d] hover:text-white disabled:opacity-50"
-                >
-                  <span>[STAFF] {staffTransition.label}</span>
-                </button>
-              )}
+            {/* Khu vực thao tác đơn hàng */}
+            <div className="rounded-2xl border border-[#decbb4] bg-[#faf6ec] p-4 sm:p-5">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h3 className="m-0 text-xs font-extrabold uppercase tracking-wider text-[#7a6254]">
+                    Thao tác đơn hàng
+                  </h3>
+                  <p className="m-0 mt-0.5 text-xs text-[#4a2e20]">
+                    {order.status === 'PAID'
+                      ? 'Đơn hàng đang chờ pha chế — Bạn có thể hủy đơn trước khi quầy bắt đầu làm món.'
+                      : order.status === 'PENDING'
+                        ? 'Đơn hàng chưa thanh toán. Bạn có thể tiếp tục thanh toán hoặc hủy đơn.'
+                        : order.status === 'PAYMENT_FAILED'
+                          ? 'Thanh toán lỗi. Bạn có thể thử lại thanh toán hoặc hủy đơn.'
+                          : order.status === 'PREPARING'
+                            ? 'Barista đang pha chế đồ uống. Đơn hàng không thể hủy.'
+                            : order.status === 'READY'
+                              ? 'Đồ uống đã sẵn sàng tại quầy nhận. Đơn hàng không thể hủy.'
+                              : order.status === 'COMPLETED'
+                                ? 'Đơn hàng đã hoàn tất thành công.'
+                                : 'Đơn hàng đã được hủy.'}
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2.5">
+                  {/* Nút hủy đơn hàng khi chưa pha chế */}
+                  {['PENDING', 'PAYMENT_FAILED', 'PAID'].includes(order.status) && !confirmCancel && (
+                    <button
+                      type="button"
+                      disabled={actionBusy}
+                      onClick={() => setConfirmCancel(true)}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-[#e5b8b8] bg-[#fbeaea] px-5 py-2.5 text-xs font-bold text-[#9b2c2c] transition hover:bg-[#f5d5d5] disabled:opacity-50"
+                    >
+                      <span>✕ Hủy đơn hàng</span>
+                      {order.status === 'PAID' && <span className="font-normal">(Hoàn tiền)</span>}
+                    </button>
+                  )}
+
+                  {/* Nút tiếp tục thanh toán đối với PENDING / PAYMENT_FAILED */}
+                  {['PENDING', 'PAYMENT_FAILED'].includes(order.status) && (
+                    <Link
+                      href={`/checkout?orderId=${order.id}`}
+                      className="inline-flex items-center gap-1.5 rounded-full bg-[#6d4c3d] px-5 py-2.5 text-xs font-bold text-white shadow-xs transition hover:bg-[#563a2d]"
+                    >
+                      <span>{order.status === 'PENDING' ? 'Tiếp tục thanh toán' : 'Thử lại thanh toán'}</span>
+                      <span aria-hidden="true">→</span>
+                    </Link>
+                  )}
+
+                  {/* Nút thao tác dành cho STAFF */}
+                  {staffTransition && (
+                    <button
+                      type="button"
+                      disabled={actionBusy}
+                      onClick={() => handleStaffTransition(staffTransition.next)}
+                      className="inline-flex items-center gap-2 rounded-full border-2 border-[#6d4c3d] bg-[#cbe8d3] px-5 py-2 text-xs font-bold text-[#4a2e20] transition hover:bg-[#6d4c3d] hover:text-white disabled:opacity-50"
+                    >
+                      <span>[STAFF] {staffTransition.label}</span>
+                    </button>
+                  )}
+                </div>
+              </div>
             </div>
 
             <div>

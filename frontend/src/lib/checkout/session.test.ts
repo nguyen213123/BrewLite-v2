@@ -113,6 +113,99 @@ it('verified failed attempt can retry on the same order with a new key', async (
   assert.notEqual(h.pays[0][0], h.pays[1][0]);
   assert.equal(h.settled.length, 1); assert.deepEqual(h.settled[0], ['order', purchased]);
 });
+it('[P1] FAIL -> retry SUCCESS but timeout -> verify: confirms PAID or PAYMENT_FAILED or keeps cart on error', async () => {
+  const h = setup(), session = h.make(); await session.create(request, purchased);
+  // 1. FAIL
+  h.status('PAYMENT_FAILED'); await session.pay('WALLET', 'FAIL');
+  assert.equal(session.snapshot().verified, true);
+  assert.equal(session.snapshot().order?.status, 'PAYMENT_FAILED');
+  assert.equal(h.settled.length, 0);
+
+  // 2. retry SUCCESS nhưng timeout
+  h.deps.pay = async () => { throw new Error('GATEWAY_TIMEOUT'); };
+  await assert.rejects(session.pay('CARD', 'SUCCESS', true), /GATEWAY_TIMEOUT/);
+  // Khi chưa xác minh, session có verified = false, lưu attempt mới, chặn gọi pay() mới
+  assert.equal(session.snapshot().verified, false);
+  assert.equal(session.snapshot().order?.status, 'PAYMENT_FAILED');
+  assert.equal(session.snapshot().attempt?.request.method, 'CARD');
+  assert.equal(session.snapshot().attempt?.request.mockOutcome, 'SUCCESS');
+  await assert.rejects(session.pay('CARD', 'SUCCESS', true), /xác minh trạng thái đơn/);
+
+  // 3. Nếu GET lỗi khi xác minh thì tiếp tục cho xác minh, giữ giỏ hàng
+  h.deps.find = async () => { throw new Error('GET_ERROR'); };
+  await assert.rejects(session.verify(), /GET_ERROR/);
+  assert.equal(session.snapshot().verified, false);
+  assert.equal(h.settled.length, 0);
+
+  // 4. Nếu GET trả PAID thì hiện thành công và trừ giỏ hàng
+  h.deps.find = async (id: string) => {
+    return { ...pending, id, status: 'PAID', reservationStatus: 'CONSUMED' };
+  };
+  const fresh = await session.verify();
+  assert.equal(fresh?.status, 'PAID');
+  assert.equal(session.snapshot().verified, true);
+  assert.equal(session.snapshot().order?.status, 'PAID');
+  assert.equal(h.settled.length, 1);
+});
+it('[P1] FAIL -> retry timeout -> verify confirms PAYMENT_FAILED allows retry with new key', async () => {
+  const h = setup(), session = h.make(); await session.create(request, purchased);
+  h.status('PAYMENT_FAILED'); await session.pay('WALLET', 'FAIL');
+
+  // Retry timeout
+  h.deps.pay = async () => { throw new Error('TIMEOUT'); };
+  await assert.rejects(session.pay('CARD', 'SUCCESS', true), /TIMEOUT/);
+  assert.equal(session.snapshot().verified, false);
+
+  // Verify xác nhận PAYMENT_FAILED
+  h.status('PAYMENT_FAILED');
+  await session.verify();
+  assert.equal(session.snapshot().verified, true);
+  assert.equal(session.snapshot().order?.status, 'PAYMENT_FAILED');
+
+  // Cho thử lại bằng khóa mới
+  h.status('PAID');
+  h.deps.pay = async (key, req) => { h.pays.push([key, req]); return { payment: {} as never, order: { ...pending, status: 'PAID' }, loyaltyPointsEarned: 0 }; };
+  await session.pay('WALLET', 'SUCCESS', true);
+  assert.equal(session.snapshot().verified, true);
+  assert.equal(session.snapshot().order?.status, 'PAID');
+  assert.equal(h.settled.length, 1);
+});
+it('[Issue 1] restores CANCELLED order: GET error keeps session and allows verify; recovered GET confirms CANCELLED and allows startOver', async () => {
+  const h = setup(), session = h.make();
+  await session.create(request, purchased);
+  h.status('CANCELLED');
+  await session.verify();
+  assert.equal(session.snapshot().verified, true);
+  assert.equal(session.snapshot().order?.status, 'CANCELLED');
+
+  // Khởi tạo lại session từ storage (như khi mở lại checkout / reload)
+  const reloaded = h.make();
+  assert.equal(reloaded.snapshot().verified, false);
+  assert.equal(reloaded.snapshot().order?.status, 'CANCELLED');
+  // Khi chưa xác minh, không cho bắt đầu đơn mới
+  assert.throws(() => reloaded.startOver(), /Cần xác minh hoặc hủy đơn/);
+
+  // GET xác minh gặp lỗi mạng
+  h.deps.find = async () => { throw new Error('NETWORK_TIMEOUT'); };
+  await assert.rejects(reloaded.verify(), /NETWORK_TIMEOUT/);
+  // Giữ session và verified vẫn là false
+  assert.equal(reloaded.snapshot().verified, false);
+  assert.equal(reloaded.snapshot().orderId, pending.id);
+  assert.equal(reloaded.snapshot().order?.status, 'CANCELLED');
+  assert.throws(() => reloaded.startOver(), /Cần xác minh hoặc hủy đơn/);
+
+  // Mạng phục hồi, GET trả CANCELLED
+  h.deps.find = async (id: string) => ({ ...pending, id, status: 'CANCELLED', reservationStatus: 'RELEASED' });
+  const fresh = await reloaded.verify();
+  assert.equal(fresh?.status, 'CANCELLED');
+  assert.equal(reloaded.snapshot().verified, true);
+  assert.equal(reloaded.snapshot().order?.status, 'CANCELLED');
+
+  // Bắt đầu đơn mới thành công
+  reloaded.startOver();
+  assert.equal(reloaded.snapshot().orderId, undefined);
+  assert.equal(reloaded.snapshot().order, undefined);
+});
 it('logout during a request suppresses late cart side effects', async () => {
   const h = setup(), session = h.make(); await session.create(request, purchased);
   h.deps.pay = async () => { h.logout(); h.status('PAID'); return {} as PaymentResult; };

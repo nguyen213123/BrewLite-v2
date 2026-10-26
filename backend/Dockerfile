@@ -1,5 +1,10 @@
 FROM node:24-bookworm-slim AS base
-RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN sed -i 's|http://|https://|g' /etc/apt/sources.list.d/debian.sources \
+    && echo 'Acquire::https::Verify-Peer "false";' > /etc/apt/apt.conf.d/99noverify \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends openssl ca-certificates \
+    && rm -f /etc/apt/apt.conf.d/99noverify \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 
 FROM base AS build
