@@ -259,7 +259,7 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
       cancelled = true;
       lifecycle.setActive(false);
     };
-  }, [session, lifecycle, initialOrderId]);
+  }, [session, lifecycle, initialOrderId, user.id]);
 
   useEffect(() => {
     let cancelled = false;
