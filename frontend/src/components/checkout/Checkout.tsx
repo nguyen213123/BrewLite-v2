@@ -134,6 +134,7 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
   const [vouchers, setVouchers] = useState<DbPromotion[]>(DEFAULT_PROMOTIONS);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [loyaltyError, setLoyaltyError] = useState(false);
   const [quote, setQuote] = useState<{ fingerprint: string; value?: Quote }>();
   const [lifecycle] = useState(createCheckoutLifecycle);
   const [session] = useState(() => {
@@ -232,6 +233,17 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
           ) {
             session.startOver();
           }
+          if (!cancelled && fresh && typeof apiGet === 'function' && getUser()?.id === user.id) {
+            try {
+              const balance = await apiGet<{ points: number }>('/loyalty/me');
+              if (!cancelled && getUser()?.id === user.id) {
+                updateUserPoints(balance.points);
+                setLoyaltyError(false);
+              }
+            } catch {
+              if (!cancelled) setLoyaltyError(true);
+            }
+          }
         })
         .catch((e) => {
           if (!cancelled) setError(e instanceof Error ? e.message : 'Chưa xác minh được đơn.');
@@ -304,8 +316,12 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
         // Read the balance, rather than incrementing a cached client balance on replay.
         try {
           const balance = await apiGet<{ points: number }>('/loyalty/me');
-          if (getUser()?.id === user.id && lifecycle.isActive()) updateUserPoints(balance.points);
+          if (getUser()?.id === user.id && lifecycle.isActive()) {
+            updateUserPoints(balance.points);
+            setLoyaltyError(false);
+          }
         } catch {
+          setLoyaltyError(true);
           setNotice('Đơn đã được xử lý. Chưa tải được điểm mới; xem lại tại trang Điểm thưởng.');
         }
       }
@@ -696,12 +712,24 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
                   ⭐
                 </div>
                 <div className="flex-1 text-sm">
-                  <p className="m-0 font-extrabold text-[#1b4332]">
-                    Tích lũy +{Math.floor(order.total / 10000)} điểm thưởng Loyalty!
-                  </p>
-                  <p className="m-0 mt-0.5 text-xs text-[#2d6a4f]">
-                    Điểm thưởng hiện tại của bạn: <strong>{user.loyaltyPoints}</strong> điểm.
-                  </p>
+                  {order.status === 'COMPLETED' ? (
+                    <p className="m-0 font-extrabold text-[#1b4332]">
+                      Đơn đã hoàn thành. Điểm thưởng đã được cộng.
+                    </p>
+                  ) : (
+                    <p className="m-0 font-extrabold text-[#1b4332]">
+                      Điểm dự kiến: +{Math.floor(order.total / 10000)}. Điểm được cộng khi đơn hoàn thành.
+                    </p>
+                  )}
+                  {loyaltyError ? (
+                    <p className="m-0 mt-0.5 text-xs text-amber-700">
+                      Chưa cập nhật được số dư điểm mới nhất từ hệ thống.
+                    </p>
+                  ) : (
+                    <p className="m-0 mt-0.5 text-xs text-[#2d6a4f]">
+                      Số dư hiện tại: <strong>{user.loyaltyPoints}</strong> điểm.
+                    </p>
+                  )}
                 </div>
                 <Link href="/loyalty" className="text-xs font-bold underline hover:text-[#1b4332]">
                   Xem điểm →
@@ -765,8 +793,8 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
             </div>
           </div>
         </div>
-      ) : order?.status === 'PAYMENT_FAILED' ? (
-        /* MÀN HÌNH THANH TOÁN THẤT BẠI */
+      ) : state.verified && order?.status === 'PAYMENT_FAILED' ? (
+        /* MÀN HÌNH THANH TOÁN THẤT BẠI (CHẮC CHẮN) */
         <div className="mx-auto mt-6 max-w-2xl space-y-6">
           <div className="overflow-hidden rounded-3xl border border-[#e5b8b8] bg-white shadow-md">
             {/* Header Hero */}
@@ -867,6 +895,19 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
                   Quay lại giỏ hàng
                 </Link>
                 <button
+                  disabled={busy}
+                  onClick={() => run(() => session.verify())}
+                  style={{
+                    background: '#efe5d4',
+                    color: '#4a2e20',
+                    border: '1px solid #decbb4',
+                    margin: 0,
+                  }}
+                  className="flex-1 rounded-full py-2.5 text-center text-xs font-bold transition hover:bg-[#e2d2b8]"
+                >
+                  Xác minh lại trạng thái
+                </button>
+                <button
                   disabled={busy || !state.verified}
                   onClick={() =>
                     run(async () => {
@@ -892,6 +933,106 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
                 >
                   Xem chi tiết đơn hàng →
                 </Link>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (!state.verified && order?.status === 'PAYMENT_FAILED') || (!state.verified && Boolean(state.attempt) && order?.status !== 'PENDING') ? (
+        /* MÀN HÌNH CHƯA XÁC NHẬN ĐƯỢC KẾT QUẢ THANH TOÁN (TIMEOUT / LỖI MẠNG) */
+        <div className="mx-auto mt-6 max-w-2xl space-y-6">
+          <div className="overflow-hidden rounded-3xl border border-amber-300 bg-white shadow-md">
+            {/* Header Hero */}
+            <div className="border-b border-amber-200 bg-gradient-to-b from-amber-50 to-[#faf6ec] px-6 py-10 text-center">
+              <div className="mx-auto mb-4 flex size-20 items-center justify-center rounded-full bg-amber-600 text-white shadow-lg">
+                <svg className="size-10" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+              <span className="inline-block rounded-full bg-amber-100 px-3.5 py-1 text-xs font-extrabold uppercase tracking-wider text-amber-800">
+                Đang chờ xác minh
+              </span>
+              <h1 className="mt-3 text-2xl sm:text-3xl font-extrabold text-[#4a2e20]">
+                Chưa xác nhận được kết quả thanh toán
+              </h1>
+              <p className="mt-2 text-sm text-[#7a6254]">
+                Yêu cầu thanh toán đã được gửi đi nhưng hệ thống chưa thể xác nhận trạng thái cuối cùng do gián đoạn kết nối hoặc quá thời gian chờ (timeout).
+              </p>
+            </div>
+
+            {/* Content Body */}
+            <div className="space-y-6 p-6 sm:p-8">
+              {/* Bảo vệ an toàn */}
+              <div className="rounded-2xl border border-[#b5dcc0] bg-[#eef7f0] p-4 text-xs text-[#2d6a4f]">
+                <p className="m-0 font-bold flex items-center gap-1.5">
+                  <span className="text-base">🛡️</span> Giỏ hàng của bạn vẫn được giữ nguyên đầy đủ!
+                </p>
+                <p className="m-0 mt-1 text-[#2d6a4f]/90">
+                  Dữ liệu giỏ hàng, thông tin đơn và lượt áp dụng ưu đãi vẫn được bảo toàn an toàn. Hệ thống chưa xác nhận thành công hay thất bại nên chưa thực hiện trừ giỏ hàng.
+                </p>
+              </div>
+
+              {/* Thông tin đơn và lần thử thanh toán */}
+              <div className="rounded-2xl border border-[#e2d2b8] bg-[#faf6ec] p-5">
+                <div className="flex items-center justify-between border-b border-[#decbb4] pb-3 text-sm">
+                  <span className="text-xs font-bold uppercase tracking-wider text-[#7a6254]">Mã đơn hàng</span>
+                  <span className="font-mono font-bold text-[#4a2e20]">{order?.code}</span>
+                </div>
+                <div className="mt-3 space-y-2 text-sm">
+                  <div className="flex items-center justify-between text-[#7a6254]">
+                    <span>Số tiền cần thanh toán:</span>
+                    <strong className="text-base font-extrabold text-[#6d4c3d]">
+                      {order ? formatVnd(order.total) : '---'}
+                    </strong>
+                  </div>
+                  {state.attempt && (
+                    <>
+                      <div className="flex items-center justify-between text-[#7a6254]">
+                        <span>Phương thức gửi đi:</span>
+                        <span className="font-bold text-[#4a2e20]">
+                          {state.attempt.request.method === 'WALLET' ? 'Ví điện tử' : 'Thẻ ngân hàng'}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between text-[#7a6254]">
+                        <span>Kịch bản thử nghiệm:</span>
+                        <span className="font-bold text-[#4a2e20]">
+                          {state.attempt.request.mockOutcome === 'SUCCESS' ? 'Thành công (SUCCESS)' : 'Thất bại (FAIL)'}
+                        </span>
+                      </div>
+                    </>
+                  )}
+                </div>
+                <p className="m-0 mt-3 border-t border-[#decbb4] pt-3 text-[11px] text-[#7a6254]">
+                  * Khóa thanh toán (Idempotency Key) và dữ liệu đang được giữ nguyên. Vui lòng bấm &ldquo;Xác minh lại trạng thái đơn&rdquo; để kiểm tra kết quả từ máy chủ.
+                </p>
+              </div>
+
+              {/* Nút hành động chính: Verify */}
+              <div className="space-y-3 pt-2">
+                <button
+                  disabled={busy}
+                  onClick={() => run(() => session.verify())}
+                  style={{ width: '100%', margin: 0 }}
+                  className="rounded-full bg-[#6d4c3d] py-3 text-sm font-bold text-white shadow-sm transition hover:bg-[#563a2d]"
+                >
+                  {busy ? 'Đang xác minh với hệ thống…' : 'Xác minh lại trạng thái đơn'}
+                </button>
+
+                <div className="flex gap-3">
+                  <Link
+                    href="/cart"
+                    className="flex-1 rounded-full border border-[#decbb4] bg-[#efe5d4] py-2.5 text-center text-xs font-bold text-[#4a2e20] transition hover:bg-[#e2d2b8]"
+                  >
+                    Quay lại giỏ hàng
+                  </Link>
+                  {order && (
+                    <Link
+                      href={`/orders/${order.id}`}
+                      className="flex-1 rounded-full border border-[#decbb4] bg-white py-2.5 text-center text-xs font-bold text-[#4a2e20] transition hover:bg-gray-50"
+                    >
+                      Xem chi tiết đơn hàng →
+                    </Link>
+                  )}
+                </div>
               </div>
             </div>
           </div>
@@ -1046,7 +1187,14 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
                     : 'Đã xác minh đơn từ hệ thống. Giỏ hiện tại được giữ nguyên vì không có snapshot giỏ của đơn khôi phục từ lịch sử.'}
                 </p>
                 <p className="text-sm text-[#4a2e20]">
-                  Điểm tích lũy hiện tại (từ hệ thống): <strong>{user.loyaltyPoints}</strong>
+                  {order.status === 'COMPLETED'
+                    ? 'Đơn đã hoàn thành. Điểm thưởng đã được cộng.'
+                    : `Điểm dự kiến: +${Math.floor(order.total / 10000)}. Điểm được cộng khi đơn hoàn thành.`}
+                </p>
+                <p className="text-sm text-[#4a2e20]">
+                  {loyaltyError
+                    ? 'Chưa cập nhật được số dư điểm mới nhất từ hệ thống.'
+                    : `Điểm tích lũy hiện tại (từ hệ thống): ${user.loyaltyPoints}`}
                 </p>
                 <Link href="/loyalty" className="font-bold text-[#6d4c3d]">
                   Xem điểm thưởng →
