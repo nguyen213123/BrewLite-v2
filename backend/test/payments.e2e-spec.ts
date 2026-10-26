@@ -180,13 +180,12 @@ describe('PaymentsService & POST /api/payments (#10)', () => {
     });
   });
 
-  it('pays a PENDING order with WALLET (SUCCESS), transitions to PAID/CONSUMED, and earns loyalty points', async () => {
+  it('pays a PENDING order with WALLET (SUCCESS), transitions to PAID/CONSUMED, and does not earn loyalty points before COMPLETED', async () => {
     const pendingOrder = buildStoredOrder({ status: 'PENDING', reservationStatus: 'HELD', version: 0 });
     const paidOrder = buildStoredOrder({ status: 'PAID', reservationStatus: 'CONSUMED', version: 1 });
 
     loadOwned.mockResolvedValueOnce(pendingOrder);
     transition.mockResolvedValueOnce(paidOrder);
-    loyaltyEarn.mockResolvedValueOnce(10);
     mockTx.payment.create.mockResolvedValueOnce({
       id: paymentId,
       orderId,
@@ -235,7 +234,7 @@ describe('PaymentsService & POST /api/payments (#10)', () => {
       expectedVersion: 0,
       toStatus: 'PAID',
     });
-    expect(loyaltyEarn).toHaveBeenCalledWith(mockTx, paidOrder);
+    expect(loyaltyEarn).not.toHaveBeenCalled();
     expect(response.body).toEqual({
       payment: {
         id: paymentId,
@@ -274,7 +273,7 @@ describe('PaymentsService & POST /api/payments (#10)', () => {
           },
         ],
       },
-      loyaltyPointsEarned: 10,
+      loyaltyPointsEarned: 0,
     });
   });
 
@@ -369,7 +368,6 @@ describe('PaymentsService & POST /api/payments (#10)', () => {
     loadOwned.mockResolvedValueOnce(failedOrder);
     prepareRetry.mockResolvedValueOnce(reReservedOrder);
     transition.mockResolvedValueOnce(paidOrder);
-    loyaltyEarn.mockResolvedValueOnce(10);
     mockTx.payment.create.mockResolvedValueOnce({
       id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
       orderId,
@@ -400,9 +398,10 @@ describe('PaymentsService & POST /api/payments (#10)', () => {
       expectedVersion: 2,
       toStatus: 'PAID',
     });
+    expect(loyaltyEarn).not.toHaveBeenCalled();
     expect(response.body.order.status).toBe('PAID');
     expect(response.body.order.version).toBe(3);
-    expect(response.body.loyaltyPointsEarned).toBe(10);
+    expect(response.body.loyaltyPointsEarned).toBe(0);
   });
 
   it('rejects paying an already PAID or CANCELLED order with a new key (409 ORDER_NOT_PAYABLE)', async () => {

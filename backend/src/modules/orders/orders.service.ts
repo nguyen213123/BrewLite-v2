@@ -109,9 +109,18 @@ export class OrdersService implements OrdersPort {
     if (!STAFF_STATUSES.includes(input.status)) {
       throw new ApiError(409, 'INVALID_ORDER_TRANSITION', `Không thể chuyển sang ${input.status} bằng endpoint này`);
     }
-    return this.unitOfWork.run(async tx =>
-      toApiOrder(await this.transitions.transition(tx, { orderId, actorUserId: staffId, expectedVersion: input.expectedVersion, toStatus: input.status })),
-    );
+    return this.unitOfWork.run(async tx => {
+      const updated = await this.transitions.transition(tx, {
+        orderId,
+        actorUserId: staffId,
+        expectedVersion: input.expectedVersion,
+        toStatus: input.status,
+      });
+      if (input.status === 'COMPLETED') {
+        await this.loyalty.earn(tx, updated);
+      }
+      return toApiOrder(updated);
+    });
   }
 
   // Shared by quote and create so both use the same formula: catalog price -> subtotal -> promotion -> total.

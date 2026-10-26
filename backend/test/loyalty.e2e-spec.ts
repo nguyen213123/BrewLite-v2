@@ -289,6 +289,50 @@ describe('Loyalty module (Issue #15)', () => {
       expect(refreshed.body.points).toBe(40);
     });
 
+    it('auto-reconciles COMPLETED orders that are missing an EARN entry when fetching /api/loyalty/me', async () => {
+      userB.loyaltyPoints = 0;
+      const unrewardedCompletedOrders = [
+        { id: 'order-studio-completed', userId: userB.id, total: 35000, status: 'COMPLETED' },
+      ];
+      (mockPrisma as Record<string, unknown>).order = {
+        findMany: jest.fn().mockImplementation(async ({ where }: { where: { userId: string } }) => {
+          if (where.userId === userB.id) return unrewardedCompletedOrders.splice(0);
+          return [];
+        }),
+      };
+      mockPrisma.loyaltyEntry.findUnique.mockResolvedValueOnce(null);
+      mockPrisma.loyaltyEntry.create.mockResolvedValueOnce({
+        id: 'entry-studio-1',
+        userId: userB.id,
+        orderId: 'order-studio-completed',
+        kind: 'EARN',
+        points: 3,
+        createdAt: new Date(),
+      });
+
+      const tokenB = jwt.sign({ sub: userB.id, role: userB.role }, TEST_SECRET, {
+        issuer: AUTH_POLICY.issuer,
+        audience: AUTH_POLICY.audience,
+        expiresIn: 3600,
+      });
+
+      const res = await request(app.getHttpServer())
+        .get('/api/loyalty/me')
+        .set('Authorization', `Bearer ${tokenB}`)
+        .expect(200);
+
+      expect(res.body.points).toBe(3);
+      expect(mockPrisma.loyaltyEntry.create).toHaveBeenCalledWith({
+        data: {
+          userId: userB.id,
+          orderId: 'order-studio-completed',
+          kind: 'EARN',
+          points: 3,
+        },
+      });
+      delete (mockPrisma as Record<string, unknown>).order;
+    });
+
     it('verifies frontend updateUserPoints synchronizes loyaltyPoints into shared auth store without infinite loops', () => {
       const authPath = resolve(__dirname, '../../frontend/src/lib/auth.ts');
       const authContent = readFileSync(authPath, 'utf8');

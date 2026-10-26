@@ -13,11 +13,13 @@ import { formatVnd } from '@/components/payments/payment-api';
 import { ProductImage } from '@/components/product-image';
 
 export default function CartPage() {
-  const { lines, setQty, removeItem, clear } = useCartStore();
+  const { lines, setQty, toggleSelect, setAllSelected, removeItem, clear } = useCartStore();
   const hydrated = useCartHydrated();
 
-  const subtotal = lines.reduce((sum, l) => sum + lineTotal(l), 0);
-  const itemCount = totalQty(lines);
+  const selectedLines = lines.filter((l) => l.selected !== false);
+  const allSelected = lines.length > 0 && selectedLines.length === lines.length;
+  const subtotal = selectedLines.reduce((sum, l) => sum + lineTotal(l), 0);
+  const itemCount = totalQty(selectedLines);
   const expectedPoints = Math.floor(subtotal / 10000);
 
   return (
@@ -89,21 +91,62 @@ export default function CartPage() {
         ) : (
           <div className="grid items-start gap-8 lg:grid-cols-[1.55fr_1fr]">
             <div className="space-y-4">
+              {/* Thanh chọn tất cả món để thanh toán */}
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#decbb4] bg-white px-4 py-3 shadow-2xs">
+                <label className="m-0 flex cursor-pointer items-center gap-3 text-sm font-bold text-[#4a2e20]">
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    onChange={(e) => setAllSelected(e.target.checked)}
+                    className="size-4.5 cursor-pointer accent-[#6d4c3d]"
+                    style={{ width: '18px', height: '18px', margin: 0 }}
+                  />
+                  <span>
+                    Chọn tất cả để thanh toán ({selectedLines.length}/{lines.length} món)
+                  </span>
+                </label>
+
+                {selectedLines.length > 0 && selectedLines.length < lines.length && (
+                  <button
+                    type="button"
+                    onClick={() => selectedLines.forEach((l) => removeItem(l.id))}
+                    className="rounded-full border border-[#e5b8b8] bg-white px-3 py-1 text-xs font-bold text-[#9b2c2c] transition hover:bg-[#fbeaea]"
+                  >
+                    Xóa {selectedLines.length} món đã chọn
+                  </button>
+                )}
+              </div>
+
               {lines.map((l) => {
                 const unit = lineUnitPrice(l);
                 const total = lineTotal(l);
+                const isSelected = l.selected !== false;
 
                 return (
                   <section
                     key={l.id}
-                    className="flex flex-col gap-4 rounded-2xl border border-[#e2d2b8] bg-[#efe5d4] p-4 shadow-xs transition hover:border-[#6d4c3d] sm:flex-row sm:items-center"
+                    className={`flex flex-col gap-4 rounded-2xl border p-4 shadow-xs transition sm:flex-row sm:items-center ${
+                      isSelected
+                        ? 'border-[#6d4c3d] bg-[#efe5d4]'
+                        : 'border-[#e2d2b8] bg-[#efe5d4]/60 opacity-75'
+                    }`}
                   >
-                    <Link
-                      href={`/products/${l.productId}`}
-                      className="relative size-22 shrink-0 overflow-hidden rounded-xl border border-white bg-white shadow-2xs"
-                    >
-                      <ProductImage src={l.imageUrl} alt={l.productName} className="size-full" />
-                    </Link>
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="checkbox"
+                        aria-label={`Chọn thanh toán ${l.productName}`}
+                        checked={isSelected}
+                        onChange={() => toggleSelect(l.id)}
+                        className="size-5 shrink-0 cursor-pointer accent-[#6d4c3d]"
+                        style={{ width: '20px', height: '20px', margin: 0 }}
+                      />
+                      <Link
+                        href={`/products/${l.productId}`}
+                        className="relative size-22 shrink-0 overflow-hidden rounded-xl border border-white bg-white shadow-2xs"
+                      >
+                        <ProductImage src={l.imageUrl} alt={l.productName} className="size-full" />
+                      </Link>
+                    </div>
 
                     <div className="min-w-0 flex-1 space-y-1.5">
                       <div className="flex flex-wrap items-center gap-2">
@@ -194,11 +237,13 @@ export default function CartPage() {
 
               <div className="my-5 space-y-3 border-y border-[#decbb4] py-4 text-sm">
                 <div className="flex items-center justify-between text-[#7a6254]">
-                  <span>Số dòng cấu hình</span>
-                  <span className="font-bold text-[#4a2e20]">{lines.length} món</span>
+                  <span>Món đã chọn thanh toán</span>
+                  <span className="font-bold text-[#4a2e20]">
+                    {selectedLines.length} / {lines.length} món
+                  </span>
                 </div>
                 <div className="flex items-center justify-between text-[#7a6254]">
-                  <span>Tổng số lượng</span>
+                  <span>Tổng số lượng chọn</span>
                   <span className="font-bold text-[#4a2e20]">{itemCount} ly</span>
                 </div>
                 <div className="flex items-center justify-between border-t border-dashed border-[#decbb4] pt-3 text-base">
@@ -214,13 +259,23 @@ export default function CartPage() {
                 <strong>+{expectedPoints} điểm</strong>
               </div>
 
-              <Link
-                href="/checkout"
-                className="flex w-full items-center justify-center gap-2 rounded-full bg-[#6d4c3d] px-6 py-3.5 text-sm font-bold text-white shadow-xs transition hover:bg-[#563a2d]"
-              >
-                <span>Tiếp tục thanh toán</span>
-                <span aria-hidden="true">→</span>
-              </Link>
+              {selectedLines.length > 0 ? (
+                <Link
+                  href="/checkout"
+                  className="flex w-full items-center justify-center gap-2 rounded-full bg-[#6d4c3d] px-6 py-3.5 text-sm font-bold text-white shadow-xs transition hover:bg-[#563a2d]"
+                >
+                  <span>Tiếp tục thanh toán ({selectedLines.length} món)</span>
+                  <span aria-hidden="true">→</span>
+                </Link>
+              ) : (
+                <button
+                  type="button"
+                  disabled
+                  className="flex w-full cursor-not-allowed items-center justify-center gap-2 rounded-full bg-[#decbb4] px-6 py-3.5 text-sm font-bold text-[#7a6254]"
+                >
+                  Chọn ít nhất 1 món để thanh toán
+                </button>
+              )}
 
               <p className="mt-4 text-center text-xs text-[#7a6254]">
                 <Link

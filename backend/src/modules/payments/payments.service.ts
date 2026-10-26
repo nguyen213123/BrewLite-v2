@@ -99,7 +99,7 @@ export class PaymentsService implements PaymentsPort {
           mockOutcome,
         });
 
-        let loyaltyPointsEarned = 0;
+        const loyaltyPointsEarned = 0;
         if (gatewayResult.status === 'SUCCEEDED') {
           order = await this.orderTransactions.transition(tx, {
             orderId: order.id,
@@ -107,7 +107,6 @@ export class PaymentsService implements PaymentsPort {
             expectedVersion: order.version,
             toStatus: 'PAID',
           });
-          loyaltyPointsEarned = await this.loyaltyTransactions.earn(tx, order);
         } else {
           order = await this.orderTransactions.transition(tx, {
             orderId: order.id,

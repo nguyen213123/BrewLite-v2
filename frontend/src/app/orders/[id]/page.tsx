@@ -3,8 +3,8 @@
 import { use, useEffect, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { apiFetch, apiGet, ApiRequestError } from '@/lib/api';
-import { getAuthSnapshot, getAuthServerSnapshot, subscribeAuth } from '@/lib/auth';
-import type { Order, OrderStatus } from '@/lib/contracts/api.generated';
+import { getAuthSnapshot, getAuthServerSnapshot, subscribeAuth, updateUserPoints } from '@/lib/auth';
+import type { LoyaltyBalance, Order, OrderStatus } from '@/lib/contracts/api.generated';
 import OrderStatusBadge from '@/components/OrderStatusBadge';
 import { formatVnd } from '@/lib/format';
 
@@ -51,7 +51,7 @@ function StatusAlert({ status }: { status: OrderStatus }) {
         <div className="rounded-xl border border-[#e2d2b8] bg-[#efe5d4] p-4 text-sm text-[#4a2e20]">
           <p className="font-bold">Đơn hàng hoàn thành</p>
           <p className="mt-0.5 text-xs text-[#7a6254]">
-            Cảm ơn bạn đã lựa chọn BrewLite Mộc Vị! Chúc bạn thưởng thức đồ uống ngon miệng.
+            Cảm ơn bạn đã lựa chọn BrewLite Mộc Vị! Điểm thưởng từ đơn hàng đã được cộng vào tài khoản của khách hàng.
           </p>
         </div>
       );
@@ -101,6 +101,13 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
         if (!ignore) {
           setOrder(data);
           setError(null);
+          if (data.status === 'COMPLETED' && user?.role === 'CUSTOMER') {
+            apiGet<LoyaltyBalance>('/loyalty/me')
+              .then((bal) => {
+                if (!ignore) updateUserPoints(bal.points);
+              })
+              .catch(() => {});
+          }
         }
       } catch (err) {
         if (!ignore) {
@@ -125,7 +132,7 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
     return () => {
       ignore = true;
     };
-  }, [id, refreshToken]);
+  }, [id, refreshToken, user?.role]);
 
   function handleRefresh() {
     setLoading(true);

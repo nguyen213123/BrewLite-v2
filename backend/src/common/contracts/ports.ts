@@ -8,6 +8,18 @@ export type PageQuery = { page: number; limit: number };
 export type IdempotentResult<T> = { data: T; replayed: boolean };
 export type StoredOrder = Prisma.OrderGetPayload<{ include: { items: { include: { toppings: true } } } }>;
 export type PromotionSnapshot = { promotionId: string | null; promotionCode: string | null; discount: number };
+export type ActivePromotion = {
+  id: string;
+  code: string;
+  type: 'FIXED' | 'PERCENT';
+  value: number;
+  minSubtotal: number;
+  maxDiscount: number | null;
+  maxUses: number | null;
+  usedCount: number;
+  startsAt: string;
+  endsAt: string;
+};
 
 export abstract class ProductsPort {
   abstract list(query: PageQuery): Promise<Api.ProductPage>;
@@ -42,6 +54,7 @@ export abstract class InventoryPort {
 }
 export abstract class PromotionsPort {
   abstract validate(userId: string, input: Api.PromotionValidationRequest): Promise<Api.PromotionValidation>;
+  listActive?(): Promise<ActivePromotion[]>;
 }
 export abstract class PromotionRulesPort {
   abstract price(tx: Tx, code: string | undefined, subtotal: number): Promise<PromotionSnapshot>;

@@ -645,7 +645,7 @@ describe('Idempotency Service & Engine (#11)', () => {
       expect(primaryRes.body.payment.amount).toBe(90000);
       expect(primaryRes.body.order.status).toBe('PAID');
       expect(mockOrderTransactions.transition).toHaveBeenCalledTimes(1);
-      expect(mockLoyaltyTransactions.earn).toHaveBeenCalledTimes(1);
+      expect(mockLoyaltyTransactions.earn).not.toHaveBeenCalled();
 
       // Client retries with the SAME key after receiving 409 Retry-After: 1 -> replays cached response with 0 extra side effects
       const retryRes = await request(app.getHttpServer())
@@ -662,7 +662,7 @@ describe('Idempotency Service & Engine (#11)', () => {
 
       expect(retryRes.body).toEqual(primaryRes.body);
       expect(mockOrderTransactions.transition).toHaveBeenCalledTimes(1);
-      expect(mockLoyaltyTransactions.earn).toHaveBeenCalledTimes(1);
+      expect(mockLoyaltyTransactions.earn).not.toHaveBeenCalled();
       expect(mockPrisma.payment.create).toHaveBeenCalledTimes(1);
     });
   });

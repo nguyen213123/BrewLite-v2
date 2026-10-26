@@ -8,7 +8,7 @@ import { getToken, getUser, getAuthSnapshot, getAuthServerSnapshot, subscribeAut
 import { useCartStore, useCartHydrated, toCartItems } from '@/lib/cart/cart-store';
 import { createCheckoutSession, createCheckoutLifecycle, paidStatuses } from '@/lib/checkout/session';
 import { describeCheckoutError, comparePrice } from '@/lib/checkout/errors';
-import type { Order, OrderStatus, PaymentMethod, Quote, User } from '@/lib/contracts/api.generated';
+import type { Order, OrderRequest, OrderStatus, PaymentMethod, Quote, User } from '@/lib/contracts/api.generated';
 import { formatVnd } from '@/components/payments/payment-api';
 
 const ORDER_STATUS_LABELS: Record<OrderStatus, { label: string; className: string }> = {
@@ -21,11 +21,61 @@ const ORDER_STATUS_LABELS: Record<OrderStatus, { label: string; className: strin
   CANCELLED: { label: 'Đã hủy (CANCELLED)', className: 'border-gray-300 bg-gray-100 text-gray-600' },
 };
 
-const QUICK_PROMOS = [
-  { code: 'SAVE10', desc: 'Giảm 10% (đơn từ 50.000₫)' },
-  { code: 'BREW20K', desc: 'Giảm 20.000₫ (đơn từ 100.000₫)' },
-  { code: 'FREETOPPING', desc: 'Tặng 10.000₫ phí Topping' },
+type DbPromotion = {
+  code: string;
+  type: 'FIXED' | 'PERCENT';
+  value: number;
+  minSubtotal: number;
+  maxDiscount: number | null;
+  maxUses: number | null;
+  usedCount: number;
+};
+
+const DEFAULT_PROMOTIONS: DbPromotion[] = [
+  {
+    code: 'GIAM20K',
+    type: 'FIXED',
+    value: 20000,
+    minSubtotal: 80000,
+    maxDiscount: null,
+    maxUses: null,
+    usedCount: 0,
+  },
+  {
+    code: 'SAVE10',
+    type: 'PERCENT',
+    value: 10,
+    minSubtotal: 100000,
+    maxDiscount: 30000,
+    maxUses: 100,
+    usedCount: 0,
+  },
 ];
+
+function computePromoDiscount(promo: DbPromotion, subtotal: number): number {
+  if (subtotal < promo.minSubtotal) return 0;
+  if (promo.type === 'FIXED') return Math.min(promo.value, subtotal);
+  let discount = Math.floor((subtotal * promo.value) / 100);
+  if (promo.maxDiscount !== null) discount = Math.min(discount, promo.maxDiscount);
+  return Math.min(discount, subtotal);
+}
+
+function formatPromoTitle(promo: DbPromotion): string {
+  if (promo.type === 'FIXED') return `Giảm ${formatVnd(promo.value)}`;
+  return promo.maxDiscount !== null
+    ? `Giảm ${promo.value}% (tối đa ${formatVnd(promo.maxDiscount)})`
+    : `Giảm ${promo.value}%`;
+}
+
+function formatPromoCondition(promo: DbPromotion): string {
+  const minText =
+    promo.minSubtotal > 0 ? `Đơn tối thiểu ${formatVnd(promo.minSubtotal)}` : 'Áp dụng mọi đơn hàng';
+  if (promo.maxUses !== null) {
+    const remaining = Math.max(0, promo.maxUses - promo.usedCount);
+    return `${minText} · Còn ${remaining} lượt`;
+  }
+  return minText;
+}
 
 export default function Checkout({ initialOrderId }: { initialOrderId?: string }) {
   const user = useSyncExternalStore(subscribeAuth, getAuthSnapshot, getAuthServerSnapshot);
@@ -77,18 +127,41 @@ export default function Checkout({ initialOrderId }: { initialOrderId?: string }
 
 function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: string }) {
   const router = useRouter();
-  const lines = useCartStore((s) => s.lines);
+  const allLines = useCartStore((s) => s.lines);
+  const lines = allLines.filter((l) => l.selected !== false);
   const [promo, setPromo] = useState('');
+  const [promoInput, setPromoInput] = useState('');
+  const [vouchers, setVouchers] = useState<DbPromotion[]>(DEFAULT_PROMOTIONS);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const [quote, setQuote] = useState<{ fingerprint: string; value: Quote }>();
+  const [quote, setQuote] = useState<{ fingerprint: string; value?: Quote }>();
   const [lifecycle] = useState(createCheckoutLifecycle);
   const [session] = useState(() => {
     const token = getToken();
     const storageKey = `brewlite-checkout:${user.id}`;
     const active = () => lifecycle.isActive() && getUser()?.id === user.id && getToken() === token;
+    let resetTerminalOnMount = false;
+    if (!initialOrderId && lines.length > 0) {
+      try {
+        const parsed = JSON.parse(sessionStorage.getItem(storageKey) ?? 'null') as {
+          order?: { status?: OrderStatus };
+        } | null;
+        if (parsed?.order?.status && [...paidStatuses, 'CANCELLED'].includes(parsed.order.status)) {
+          resetTerminalOnMount = true;
+          sessionStorage.setItem(storageKey, JSON.stringify({ userId: user.id, purchased: [] }));
+        }
+      } catch {
+        // Ignore malformed storage
+      }
+    }
     return createCheckoutSession(user.id, {
-      read: () => sessionStorage.getItem(storageKey),
+      read: () => {
+        if (resetTerminalOnMount) {
+          resetTerminalOnMount = false;
+          return null;
+        }
+        return sessionStorage.getItem(storageKey);
+      },
       write: (value) => sessionStorage.setItem(storageKey, value),
       key: () => crypto.randomUUID(),
       active,
@@ -105,12 +178,30 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
   const [method, setMethod] = useState<PaymentMethod>(state.attempt?.request.method ?? 'WALLET');
   const [outcome, setOutcome] = useState<'SUCCESS' | 'FAIL'>(state.attempt?.request.mockOutcome ?? 'SUCCESS');
   const [busy, setBusy] = useState(Boolean(state.orderId || initialOrderId));
-  const request = {
+
+  const getLineUnitPrice = (l: (typeof lines)[number]) =>
+    (l.sizePrice ?? 0) + (l.toppings ?? []).reduce((sum, t) => sum + (t.price ?? 0), 0);
+  const estimatedSubtotal = lines.reduce((sum, l) => sum + getLineUnitPrice(l) * l.qty, 0);
+  const totalItems = lines.reduce((sum, l) => sum + l.qty, 0);
+
+  const normalizedPromo = promo.trim().toUpperCase();
+  const knownVoucher = vouchers.find((v) => v.code === normalizedPromo);
+  const activePromo =
+    knownVoucher && estimatedSubtotal < knownVoucher.minSubtotal ? '' : normalizedPromo;
+
+  const request: OrderRequest = {
     items: toCartItems(lines),
-    ...(promo.trim() ? { promotionCode: promo.trim().toUpperCase() } : {}),
+    ...(activePromo ? { promotionCode: activePromo } : {}),
   };
   const fingerprint = JSON.stringify(request);
   const currentQuote = quote?.fingerprint === fingerprint ? quote.value : undefined;
+  const previewDiscount = knownVoucher ? computePromoDiscount(knownVoucher, estimatedSubtotal) : 0;
+  const displaySubtotal = currentQuote ? currentQuote.subtotal : estimatedSubtotal;
+  const displayDiscount = currentQuote ? currentQuote.discount : previewDiscount;
+  const displayTotal = currentQuote
+    ? currentQuote.total
+    : Math.max(0, estimatedSubtotal - previewDiscount);
+
   const order = state.order;
   const replayAttempt =
     state.attempt && !(state.verified && order?.status === 'PAYMENT_FAILED')
@@ -129,8 +220,18 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
     let cancelled = false;
     if (session.snapshot().orderId || initialOrderId) {
       Promise.resolve()
-        .then(() => {
-          if (!cancelled) return initialOrderId ? session.resume(initialOrderId) : session.verify();
+        .then(async () => {
+          if (cancelled) return;
+          const fresh = initialOrderId ? await session.resume(initialOrderId) : await session.verify();
+          if (
+            !cancelled &&
+            !initialOrderId &&
+            fresh &&
+            [...paidStatuses, 'CANCELLED'].includes(fresh.status) &&
+            useCartStore.getState().lines.some((l) => l.selected !== false)
+          ) {
+            session.startOver();
+          }
         })
         .catch((e) => {
           if (!cancelled) setError(e instanceof Error ? e.message : 'Chưa xác minh được đơn.');
@@ -147,6 +248,50 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
       lifecycle.setActive(false);
     };
   }, [session, lifecycle, initialOrderId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (typeof apiGet === 'function') {
+      apiGet<DbPromotion[]>('/promotions')
+        .then((rows) => {
+          if (!cancelled && Array.isArray(rows)) {
+            setVouchers(rows);
+          }
+        })
+        .catch(() => {});
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const inOrderPhase = Boolean(state.request || state.orderId);
+  const quoting = !inOrderPhase && lines.length > 0 && quote?.fingerprint !== fingerprint;
+
+  useEffect(() => {
+    if (inOrderPhase || !lines.length || quote?.fingerprint === fingerprint) return;
+    let cancelled = false;
+    const body = JSON.parse(fingerprint) as OrderRequest;
+    apiPost<Quote>('/orders/quote', body)
+      .then((value) => {
+        if (!cancelled) {
+          setQuote({ fingerprint, value });
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          setError(describeCheckoutError(e).message);
+          setQuote({ fingerprint });
+          if (activePromo) {
+            setPromo('');
+            setPromoInput('');
+          }
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [inOrderPhase, lines.length, quote?.fingerprint, fingerprint, activePromo]);
 
   async function run(work: () => Promise<unknown>) {
     if (!lifecycle.acquire()) return;
@@ -175,7 +320,6 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
     }
   }
 
-  const inOrderPhase = Boolean(state.request || state.orderId);
   const currentStep = paid ? 3 : inOrderPhase ? 2 : 1;
 
   return (
@@ -262,138 +406,233 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
               </p>
             </div>
           ) : (
-            <div className="grid items-start gap-8 lg:grid-cols-[1.35fr_1fr]">
+            <div className="mx-auto max-w-3xl space-y-6">
               <div>
                 <div className="flex items-center justify-between border-b border-[#decbb4] pb-3">
-                  <h2 className="m-0">Kiểm tra đơn hàng</h2>
+                  <h2 className="m-0">Tóm tắt món đặt ({totalItems} ly)</h2>
                   <span className="rounded-full bg-[#cbe8d3] px-3 py-0.5 text-xs font-bold text-[#2d6a4f]">
                     {lines.length} dòng món
                   </span>
                 </div>
 
                 <ul className="divide-y divide-[#decbb4]/70">
-                  {lines.map((l) => (
-                    <li
-                      key={l.id}
-                      className="flex items-center justify-between gap-3 py-3 text-sm"
-                    >
-                      <div>
-                        <span className="font-bold text-[#4a2e20]">
-                          {l.productName} · {l.size}
-                        </span>
-                        <span className="block text-xs text-[#7a6254]">
-                          {l.toppings.map((t) => t.name).join(', ') || 'Không topping'} × {l.qty}
-                        </span>
-                      </div>
-                      <span className="rounded-full bg-[#efe5d4] px-3 py-1 text-xs font-bold text-[#4a2e20]">
-                        × {l.qty}
-                      </span>
-                    </li>
-                  ))}
+                  {lines.map((l) => {
+                    const unit = getLineUnitPrice(l);
+                    const lineSum = unit * l.qty;
+                    return (
+                      <li
+                        key={l.id}
+                        className="flex items-center justify-between gap-3 py-3.5 text-sm"
+                      >
+                        <div>
+                          <span className="font-bold text-[#4a2e20]">
+                            {l.productName} · Size {l.size}
+                          </span>
+                          <span className="block text-xs text-[#7a6254]">
+                            {l.toppings.map((t) => t.name).join(', ') || 'Không topping'} ·{' '}
+                            {formatVnd(unit)} × {l.qty}
+                          </span>
+                        </div>
+                        <div className="text-right">
+                          <span className="block font-extrabold text-[#6d4c3d]">
+                            {formatVnd(lineSum)}
+                          </span>
+                          <span className="inline-block rounded-full bg-[#efe5d4] px-2.5 py-0.5 text-[11px] font-bold text-[#4a2e20]">
+                            × {l.qty}
+                          </span>
+                        </div>
+                      </li>
+                    );
+                  })}
                 </ul>
+              </div>
 
-                <div className="mt-5 rounded-2xl border border-[#e2d2b8] bg-[#efe5d4] p-4">
-                  <label className="m-0">
-                    Mã khuyến mãi
-                    <input
-                      value={promo}
-                      maxLength={32}
-                      placeholder="Nhập mã ưu đãi (VD: SAVE10, BREW20K...)"
-                      onChange={(e) => setPromo(e.target.value)}
-                      disabled={busy}
-                    />
-                  </label>
+              {/* Khu vực chọn Voucher / Mã giảm giá lấy từ bảng Promotion trong DB, cuộn dọc từ trên xuống dưới */}
+              <div className="rounded-2xl border border-[#e2d2b8] bg-[#efe5d4] p-5">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <h3 className="m-0 text-base font-extrabold text-[#4a2e20]">
+                      🎟️ Ưu đãi &amp; Mã giảm giá (Voucher)
+                    </h3>
+                    <p className="m-0 mt-0.5 text-xs text-[#7a6254]">
+                      Danh sách mã lấy trực tiếp từ bảng Promotion trong Database. Cuộn xuống để chọn mã.
+                    </p>
+                  </div>
+                  {activePromo && (
+                    <span className="rounded-full bg-[#2d6a4f] px-3 py-1 text-xs font-bold text-white">
+                      Đang dùng: {activePromo}
+                    </span>
+                  )}
+                </div>
 
-                  <div className="mt-3 flex flex-wrap items-center gap-2">
-                    <span className="text-xs font-bold text-[#7a6254]">Chọn nhanh:</span>
-                    {QUICK_PROMOS.map((p) => {
-                      const selected = promo.trim().toUpperCase() === p.code;
-                      return (
+                <div className="mt-4 max-h-72 space-y-2.5 overflow-y-auto pr-1">
+                  {vouchers.map((v) => {
+                    const eligible = estimatedSubtotal >= v.minSubtotal;
+                    const selected = activePromo === v.code;
+                    const estSave = computePromoDiscount(v, estimatedSubtotal);
+                    return (
+                      <div
+                        key={v.code}
+                        className={`flex items-center justify-between gap-3 rounded-xl border p-3.5 transition ${
+                          selected
+                            ? 'border-[#2d6a4f] bg-[#cbe8d3]/60 shadow-2xs'
+                            : eligible
+                              ? 'border-[#decbb4] bg-white hover:border-[#6d4c3d]'
+                              : 'border-[#e2d2b8] bg-white/60 opacity-75'
+                        }`}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="rounded-md bg-[#6d4c3d] px-2 py-0.5 font-mono text-xs font-extrabold text-white">
+                              {v.code}
+                            </span>
+                            <span className="text-sm font-extrabold text-[#4a2e20]">
+                              {formatPromoTitle(v)}
+                            </span>
+                          </div>
+                          <p className="m-0 mt-1 text-xs text-[#7a6254]">
+                            {formatPromoCondition(v)}
+                            {eligible ? (
+                              <span className="ml-1.5 font-bold text-[#2d6a4f]">
+                                · Tiết kiệm {formatVnd(estSave)}
+                              </span>
+                            ) : (
+                              <span className="ml-1.5 font-semibold text-amber-800">
+                                · Mua thêm {formatVnd(v.minSubtotal - estimatedSubtotal)} để dùng mã
+                              </span>
+                            )}
+                          </p>
+                        </div>
+
                         <button
-                          key={p.code}
                           type="button"
-                          disabled={busy}
-                          onClick={() => setPromo(selected ? '' : p.code)}
+                          disabled={busy || !eligible}
+                          onClick={() => {
+                            setError('');
+                            const next = selected ? '' : v.code;
+                            setPromo(next);
+                            setPromoInput(next);
+                          }}
                           style={{
                             margin: 0,
-                            padding: '5px 12px',
+                            padding: '6px 14px',
                             fontSize: '12px',
-                            background: selected ? '#6d4c3d' : '#ffffff',
-                            color: selected ? '#ffffff' : '#4a2e20',
-                            border: '1px solid #decbb4',
+                            background: selected ? '#2d6a4f' : eligible ? '#6d4c3d' : '#decbb4',
+                            color: '#ffffff',
+                            border: 'none',
                           }}
                         >
-                          {p.code}
+                          {selected ? '✓ Đã chọn' : eligible ? 'Chọn mã' : 'Chưa đủ ĐK'}
                         </button>
-                      );
-                    })}
-                  </div>
+                      </div>
+                    );
+                  })}
+                </div>
 
-                  <div className="mt-4">
-                    <button
+                <div className="mt-4 border-t border-[#decbb4] pt-3">
+                  <p className="m-0 mb-2 text-xs font-bold text-[#7a6254]">
+                    Hoặc nhập mã khuyến mãi khác:
+                  </p>
+                  <div className="flex gap-2">
+                    <input
+                      value={promoInput}
+                      maxLength={32}
+                      placeholder="Nhập mã ưu đãi (VD: SAVE10, GIAM20K...)"
+                      onChange={(e) => setPromoInput(e.target.value)}
                       disabled={busy}
-                      onClick={() =>
-                        run(async () => {
-                          const value = await session.quote(request);
-                          setQuote({ fingerprint, value });
-                        })
-                      }
+                      style={{ margin: 0, flex: 1 }}
+                    />
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => {
+                        setError('');
+                        setPromo(promoInput.trim().toUpperCase());
+                      }}
+                      style={{
+                        margin: 0,
+                        padding: '8px 16px',
+                        fontSize: '12px',
+                        whiteSpace: 'nowrap',
+                      }}
                     >
-                      Tính giá từ hệ thống
+                      {promoInput.trim() ? 'Áp dụng' : 'Bỏ mã'}
                     </button>
                   </div>
                 </div>
               </div>
 
+              {/* Bảng tổng kết thanh toán hiển thị ngay bên dưới theo chiều dọc */}
               <div className="rounded-2xl border border-[#e2d2b8] bg-[#efe5d4] p-5">
-                <h2 className="m-0 text-base font-extrabold text-[#4a2e20]">Báo giá từ hệ thống</h2>
-                {!currentQuote ? (
-                  <p className="mt-3 text-xs leading-relaxed text-[#7a6254]">
-                    Bấm <strong>“Tính giá từ hệ thống”</strong> để máy chủ kiểm tra tồn kho, áp dụng mã khuyến mãi và báo giá chính xác trước khi tạo đơn.
+                <div className="flex items-center justify-between gap-2">
+                  <h2 className="m-0 text-base font-extrabold text-[#4a2e20]">
+                    Chi tiết thanh toán
+                  </h2>
+                  <span className="rounded-full bg-[#cbe8d3] px-2.5 py-0.5 text-[11px] font-bold text-[#2d6a4f]">
+                    {quoting
+                      ? 'Đang cập nhật giá…'
+                      : currentQuote
+                        ? '✓ Giá từ hệ thống'
+                        : 'Giá tạm tính'}
+                  </span>
+                </div>
+
+                <div className="mt-4 space-y-3 rounded-xl bg-white p-4 text-sm">
+                  <p className="m-0 flex items-center justify-between text-[#7a6254]">
+                    <span>Tạm tính ({totalItems} ly):</span>
+                    <span className="font-bold text-[#4a2e20]">{formatVnd(displaySubtotal)}</span>
                   </p>
-                ) : (
-                  <div className="mt-4 space-y-3 rounded-xl bg-white p-4 text-sm">
-                    <p className="m-0 flex items-center justify-between text-[#7a6254]">
-                      <span>Tạm tính:</span>
-                      <span className="font-bold text-[#4a2e20]">
-                        {formatVnd(currentQuote.subtotal)}
-                      </span>
-                    </p>
-                    <p className="m-0 flex items-center justify-between text-[#2d6a4f]">
-                      <span>Giảm:</span>
-                      <span className="font-bold">−{formatVnd(currentQuote.discount)}</span>
-                    </p>
-                    <p className="m-0 flex items-center justify-between border-t border-[#decbb4] pt-3 text-base">
-                      <strong>Tổng: {formatVnd(currentQuote.total)}</strong>
-                      <span className="rounded-full bg-[#cbe8d3] px-2.5 py-0.5 text-xs font-bold text-[#2d6a4f]">
-                        +{Math.floor(currentQuote.total / 10000)} điểm
-                      </span>
-                    </p>
-                    <div className="pt-2">
-                      <button
-                        disabled={busy}
-                        onClick={() =>
-                          run(() =>
-                            session.create(
-                              request,
-                              lines.map((l) => ({ id: l.id, key: l.key, qty: l.qty })),
-                              currentQuote.total,
-                            ),
-                          )
-                        }
-                        style={{ width: '100%', margin: 0 }}
-                      >
-                        Tạo đơn và giữ hàng
-                      </button>
+                  <p className="m-0 flex items-center justify-between text-[#2d6a4f]">
+                    <span>
+                      Ưu đãi Voucher{activePromo ? ` (${activePromo})` : ''}:
+                    </span>
+                    <span className="font-bold">−{formatVnd(displayDiscount)}</span>
+                  </p>
+                  <div className="border-t border-[#decbb4] pt-3">
+                    <div className="flex items-center justify-between text-base">
+                      <strong className="text-[#4a2e20]">Tổng thanh toán:</strong>
+                      <strong className="text-xl font-extrabold text-[#6d4c3d]">
+                        {formatVnd(displayTotal)}
+                      </strong>
                     </div>
+                    <p className="m-0 mt-1.5 flex items-center justify-between text-xs text-[#7a6254]">
+                      <span>Điểm thưởng khi hoàn thành đơn:</span>
+                      <span className="rounded-full bg-[#cbe8d3] px-2.5 py-0.5 font-bold text-[#2d6a4f]">
+                        +{Math.floor(displayTotal / 10000)} điểm
+                      </span>
+                    </p>
                   </div>
-                )}
+
+                  <div className="pt-2">
+                    <button
+                      disabled={busy}
+                      onClick={() =>
+                        run(async () => {
+                          let quotedTotal = currentQuote?.total;
+                          if (quotedTotal === undefined) {
+                            const q = await session.quote(request);
+                            setQuote({ fingerprint, value: q });
+                            quotedTotal = q.total;
+                          }
+                          await session.create(
+                            request,
+                            lines.map((l) => ({ id: l.id, key: l.key, qty: l.qty })),
+                            quotedTotal,
+                          );
+                        })
+                      }
+                      style={{ width: '100%', margin: 0 }}
+                    >
+                      Đặt đơn &amp; Tiếp tục thanh toán
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           )}
         </section>
       ) : (
-        <div className="mt-6 grid items-start gap-6 lg:grid-cols-[1.35fr_1fr]">
+        <div className="mx-auto mt-6 max-w-3xl space-y-6">
           <div className="space-y-6">
             {order && (
               <section className="shop-panel m-0">

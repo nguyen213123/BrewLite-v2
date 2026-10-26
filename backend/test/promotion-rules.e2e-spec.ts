@@ -63,6 +63,16 @@ describe('Issue #14 — PromotionsService.price (Tx giả, không cần DB)', ()
   it('mã hết lượt là 409 PROMOTION_EXHAUSTED', async () => {
     await expect(service.price(txWith({ ...rule, maxUses: 1, usedCount: 1 }), 'SAVE10', 120000)).rejects.toMatchObject({ response: { code: 'PROMOTION_EXHAUSTED' } });
   });
+  it('listActive trả danh sách mã còn lượt từ bảng Promotion trong DB', async () => {
+    const activeRule = { ...rule, code: 'GIAM20K', type: 'FIXED' as const, value: 20000, minSubtotal: 80000, maxDiscount: null, maxUses: null, usedCount: 0 };
+    const exhaustedRule = { ...rule, code: 'HETLUOT', maxUses: 5, usedCount: 5 };
+    const svc = new PromotionsService(
+      { resolve: async () => [] } as unknown as CatalogPricingPort,
+      { run: (fn: (tx: Tx) => unknown) => fn({ promotion: { findMany: async () => [activeRule, rule, exhaustedRule] } } as unknown as Tx) } as unknown as UnitOfWork,
+    );
+    const list = await (svc as unknown as { listActive: () => Promise<Array<{ code: string }>> }).listActive();
+    expect(list.map(p => p.code)).toEqual(['GIAM20K', 'SAVE10']);
+  });
 });
 
 describe('Issue #14 — validate: giới hạn tiền và gộp dòng trùng (Tx giả)', () => {

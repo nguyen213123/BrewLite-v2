@@ -81,17 +81,17 @@ integration('Real checkout: auth/catalog/create/inventory/promotion/payment/loya
     expect((await prisma.product.findUniqueOrThrow({ where: { id: f.id } })).stock).toBe(18);
     const paymentKey = randomUUID(), payBody = { orderId: created.body.id, method: 'CARD', mockOutcome: 'SUCCESS' };
     const paid = await post('/payments', payBody, paymentKey).expect(200);
-    expect(paid.body).toMatchObject({ order: { status: 'PAID', total: 108000 }, loyaltyPointsEarned: 10 });
+    expect(paid.body).toMatchObject({ order: { status: 'PAID', total: 108000 }, loyaltyPointsEarned: 0 });
     await post('/payments', payBody, paymentKey).expect(200);
     expect(await prisma.payment.count({ where: { orderId: created.body.id } })).toBe(1);
-    expect(await prisma.loyaltyEntry.count({ where: { orderId: created.body.id, kind: 'EARN' } })).toBe(1);
+    expect(await prisma.loyaltyEntry.count({ where: { orderId: created.body.id, kind: 'EARN' } })).toBe(0);
     await post('/payments', payBody).expect(409);
     const cancelled = await post(`/orders/${created.body.id}/cancel`, { expectedVersion: paid.body.order.version }).expect(200);
     await post(`/orders/${created.body.id}/cancel`, { expectedVersion: cancelled.body.version }).expect(200);
     expect((await prisma.product.findUniqueOrThrow({ where: { id: f.id } })).stock).toBe(20);
     expect((await prisma.promotion.findUniqueOrThrow({ where: { id: f.promo.id } })).usedCount).toBe(0);
     expect((await prisma.user.findUniqueOrThrow({ where: { id: userId } })).loyaltyPoints).toBe(0);
-    expect(await prisma.loyaltyEntry.count({ where: { orderId: created.body.id, kind: 'REVERSE' } })).toBe(1);
+    expect(await prisma.loyaltyEntry.count({ where: { orderId: created.body.id, kind: 'REVERSE' } })).toBe(0);
     expect((await prisma.payment.findFirstOrThrow({ where: { orderId: created.body.id } })).status).toBe('REFUNDED');
   });
   it('failed payment releases once; a new key retries the same order with the original prices', async () => {
@@ -181,13 +181,12 @@ integration('Real checkout: auth/catalog/create/inventory/promotion/payment/loya
     const before = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
     const key = randomUUID(), body = { orderId: created.body.id, method: 'CARD', mockOutcome: 'SUCCESS' };
     const paid = await concurrentReplays('/payments', body, key, 200);
-    expect(paid).toMatchObject({ order: { id: created.body.id, status: 'PAID', reservationStatus: 'CONSUMED', version: 1 }, loyaltyPointsEarned: 10 });
+    expect(paid).toMatchObject({ order: { id: created.body.id, status: 'PAID', reservationStatus: 'CONSUMED', version: 1 }, loyaltyPointsEarned: 0 });
     expect(await prisma.payment.count({ where: { orderId: created.body.id } })).toBe(1);
     expect(await prisma.orderEvent.count({ where: { orderId: created.body.id } })).toBe(2);
     const entries = await prisma.loyaltyEntry.findMany({ where: { orderId: created.body.id } });
-    expect(entries).toHaveLength(1);
-    expect(entries[0]).toMatchObject({ kind: 'EARN', points: 10 });
-    expect((await prisma.user.findUniqueOrThrow({ where: { id: userId } })).loyaltyPoints).toBe(before.loyaltyPoints + 10);
+    expect(entries).toHaveLength(0);
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: userId } })).loyaltyPoints).toBe(before.loyaltyPoints);
     expect(await prisma.product.findUniqueOrThrow({ where: { id: f.id } })).toMatchObject({ stock: 18, version: 1 });
     expect(await prisma.promotion.findUniqueOrThrow({ where: { id: f.promo.id } })).toMatchObject({ usedCount: 1, version: 1 });
     const records = await prisma.idempotencyRecord.findMany({ where: { userId, scope: 'PAY_ORDER', key } });
@@ -228,7 +227,7 @@ integration('Real checkout: auth/catalog/create/inventory/promotion/payment/loya
     expect(await prisma.orderEvent.count({ where: { orderId: created.body.id } })).toBe(4);
     expect(await prisma.product.findUniqueOrThrow({ where: { id: f.id } })).toMatchObject({ stock: 18, version: 3 });
     expect(await prisma.promotion.findUniqueOrThrow({ where: { id: f.promo.id } })).toMatchObject({ usedCount: 1, version: 3 });
-    expect(await prisma.loyaltyEntry.count({ where: { orderId: created.body.id, kind: 'EARN' } })).toBe(1);
-    expect((await prisma.user.findUniqueOrThrow({ where: { id: userId } })).loyaltyPoints).toBe(before.loyaltyPoints + 10);
+    expect(await prisma.loyaltyEntry.count({ where: { orderId: created.body.id, kind: 'EARN' } })).toBe(0);
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: userId } })).loyaltyPoints).toBe(before.loyaltyPoints);
   }, 30_000);
 });

@@ -23,6 +23,7 @@ export type CartLine = {
   sizePrice: number;
   toppings: CartTopping[];
   qty: number;
+  selected?: boolean;
   version?: number;
 };
 
@@ -85,6 +86,8 @@ type CartState = {
   /** Hàm dùng chung: TV1 (trang chi tiết) và menu gọi để thêm vào giỏ. */
   addItem: (input: AddItemInput) => AddItemResult;
   setQty: (keyOrId: string, qty: number) => void;
+  toggleSelect: (keyOrId: string) => void;
+  setAllSelected: (selected: boolean) => void;
   removeItem: (keyOrId: string) => void;
   /** Chỉ trừ các dòng đã mua sau khi đơn PAID; dòng thêm sau đó vẫn giữ. */
   removePurchased: (purchased: (PurchasedLine | CartLine)[]) => void;
@@ -191,6 +194,7 @@ export const useCartStore = create<CartState>()(
               sizePrice: input.sizePrice,
               toppings,
               qty: finalQty,
+              selected: true,
               version: 1,
             },
           ],
@@ -210,6 +214,18 @@ export const useCartStore = create<CartState>()(
           ),
         }));
       },
+      toggleSelect: (keyOrId) =>
+        set((s) => ({
+          lines: s.lines.map((l) =>
+            l.key === keyOrId || l.id === keyOrId
+              ? { ...l, selected: l.selected === false ? true : false }
+              : l,
+          ),
+        })),
+      setAllSelected: (selected) =>
+        set((s) => ({
+          lines: s.lines.map((l) => ({ ...l, selected })),
+        })),
       removeItem: (keyOrId) =>
         set((s) => ({
           lines: s.lines.filter((l) => l.key !== keyOrId && l.id !== keyOrId),

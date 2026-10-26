@@ -318,12 +318,16 @@ describe('OrdersService.cancel', () => {
 });
 
 describe('OrdersService.transition (STAFF)', () => {
-  it('walks PAID -> PREPARING -> READY -> COMPLETED and records each step', async () => {
+  it('walks PAID -> PREPARING -> READY -> COMPLETED, records each step, and earns loyalty points only on COMPLETED', async () => {
     const db = fakeDb({ status: 'PAID', version: 1 });
     await db.orders.transition(STAFF, ORDER, { status: 'PREPARING', expectedVersion: 1 });
+    expect(db.loyalty.earn).not.toHaveBeenCalled();
     await db.orders.transition(STAFF, ORDER, { status: 'READY', expectedVersion: 2 });
+    expect(db.loyalty.earn).not.toHaveBeenCalled();
     const done = await db.orders.transition(STAFF, ORDER, { status: 'COMPLETED', expectedVersion: 3 });
     expect(done).toMatchObject({ status: 'COMPLETED', version: 4 });
+    expect(db.loyalty.earn).toHaveBeenCalledTimes(1);
+    expect(db.loyalty.earn).toHaveBeenCalledWith(db.tx, expect.objectContaining({ id: ORDER, status: 'COMPLETED', version: 4 }));
     expect(db.events.map(e => e.toStatus)).toEqual(['PREPARING', 'READY', 'COMPLETED']);
     expect(db.events.every(e => e.actorUserId === STAFF)).toBe(true);
   });

@@ -10,7 +10,22 @@ const EARN_RATE_VND = 10000;
 export class LoyaltyService implements LoyaltyPort, LoyaltyTransactionsPort {
   constructor(private readonly prisma: PrismaService) {}
 
+  private async syncCompletedOrders(userId: string): Promise<void> {
+    if (!this.prisma.order?.findMany) return;
+    const unrewarded = await this.prisma.order.findMany({
+      where: {
+        userId,
+        status: 'COMPLETED',
+        loyaltyEntries: { none: { kind: 'EARN' } },
+      },
+    });
+    for (const order of unrewarded) {
+      await this.earn(this.prisma as unknown as Tx, order as unknown as StoredOrder);
+    }
+  }
+
   async balance(userId: string): Promise<Api.LoyaltyBalance> {
+    await this.syncCompletedOrders(userId);
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: { loyaltyPoints: true },
@@ -23,6 +38,7 @@ export class LoyaltyService implements LoyaltyPort, LoyaltyTransactionsPort {
   }
 
   async entries(userId: string, query: PageQuery): Promise<Api.LoyaltyPage> {
+    await this.syncCompletedOrders(userId);
     const page = Math.max(1, query.page ?? 1);
     const limit = Math.max(1, Math.min(50, query.limit ?? 12));
     const skip = (page - 1) * limit;

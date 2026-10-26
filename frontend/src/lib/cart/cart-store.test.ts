@@ -377,6 +377,23 @@ describe('Cart Store - Issue 5 & Issue Fixes', () => {
       useCartStore.getState().clear();
       assert.equal(getLines().length, 0);
     });
+
+    it('toggleSelect và setAllSelected bật/tắt trạng thái chọn từng món hoặc toàn bộ giỏ', () => {
+      useCartStore.getState().addItem({ ...sampleProduct, qty: 1 });
+      useCartStore.getState().addItem({ ...sampleCoffee, qty: 2 });
+      assert.equal(getLines().every((l) => l.selected !== false), true);
+
+      const firstId = getLines()[0].id;
+      useCartStore.getState().toggleSelect(firstId);
+      assert.equal(getLines()[0].selected, false);
+      assert.equal(getLines()[1].selected !== false, true);
+
+      useCartStore.getState().setAllSelected(false);
+      assert.equal(getLines().every((l) => l.selected === false), true);
+
+      useCartStore.getState().setAllSelected(true);
+      assert.equal(getLines().every((l) => l.selected === true), true);
+    });
   });
 });
 

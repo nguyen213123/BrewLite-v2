@@ -68,7 +68,7 @@ for (const example of fixtures.examples) {
   if (example.responseSchema === 'PaymentResult') {
     assert.equal(body.payment.amount, body.order.total);
     assert.equal(body.payment.orderId, body.order.id);
-    assert.equal(body.loyaltyPointsEarned, body.payment.status === 'SUCCEEDED' ? Math.floor(body.order.total / 10000) : 0);
+    assert.equal(body.loyaltyPointsEarned, 0);
     assert.equal(body.order.status, body.payment.status === 'SUCCEEDED' ? 'PAID' : 'PAYMENT_FAILED');
   }
 }

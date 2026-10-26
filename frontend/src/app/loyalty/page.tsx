@@ -161,7 +161,7 @@ export default function LoyaltyPage() {
                   1 điểm cho mỗi {formatVnd(balance?.earnRateVnd ?? 10000)}
                 </p>
                 <p className="mt-0.5 text-xs text-[#7a6254]">
-                  Tự động cộng khi đơn PAID và hoàn đảo nếu hủy trước pha chế
+                  Tự động cộng khi đơn hàng hoàn thành (COMPLETED)
                 </p>
               </div>
             </div>

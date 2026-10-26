@@ -1065,7 +1065,7 @@ paths:
                           unitPrice: 60000
                           lineTotal: 120000
                           id: 55555555-5555-4555-8555-555555555555
-                    loyaltyPointsEarned: 10
+                    loyaltyPointsEarned: 0
                 payment fails:
                   value:
                     payment:
@@ -1141,7 +1141,7 @@ paths:
                           unitPrice: 60000
                           lineTotal: 120000
                           id: 55555555-5555-4555-8555-555555555555
-                    loyaltyPointsEarned: 10
+                    loyaltyPointsEarned: 0
                 failed payment replay:
                   value:
                     payment:
@@ -1217,7 +1217,7 @@ paths:
                           unitPrice: 60000
                           lineTotal: 120000
                           id: 55555555-5555-4555-8555-555555555555
-                    loyaltyPointsEarned: 10
+                    loyaltyPointsEarned: 0
           headers:
             Idempotency-Replayed:
               description: true khi replay, false ở lần thực hiện đầu.

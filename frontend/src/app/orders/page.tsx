@@ -3,8 +3,8 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { apiGet, ApiRequestError } from '@/lib/api';
-import { subscribeAuth, getAuthSnapshot, getAuthServerSnapshot } from '@/lib/auth';
-import type { OrderPage, OrderSummary } from '@/lib/contracts/api.generated';
+import { subscribeAuth, getAuthSnapshot, getAuthServerSnapshot, updateUserPoints } from '@/lib/auth';
+import type { LoyaltyBalance, OrderPage, OrderSummary } from '@/lib/contracts/api.generated';
 import OrderStatusBadge from '@/components/OrderStatusBadge';
 import { formatVnd } from '@/lib/format';
 
@@ -33,6 +33,11 @@ export default function OrdersHistoryPage() {
           setTotalPages(response.meta.totalPages);
           setTotal(response.meta.total);
           setError(null);
+          apiGet<LoyaltyBalance>('/loyalty/me')
+            .then((bal) => {
+              if (!ignore) updateUserPoints(bal.points);
+            })
+            .catch(() => {});
         }
       } catch (err) {
         if (!ignore) {

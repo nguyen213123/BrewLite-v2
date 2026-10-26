@@ -727,7 +727,7 @@ export function PaymentPriceSummary({
             </>
           ) : (
             <>
-              Tích lũy <strong>+{points} điểm thưởng</strong> sau khi đơn PAID
+              Tích lũy <strong>+{points} điểm thưởng</strong> khi đơn hoàn thành (COMPLETED)
             </>
           )}
         </span>
@@ -1203,7 +1203,7 @@ export function PaymentCheckoutPhone({
 
   const totalFormatted = formatVnd(effectiveTotal);
   const expectedPoints = calculateExpectedLoyaltyPoints(effectiveTotal);
-  const finalPoints = earnedLoyaltyPoints ?? expectedPoints;
+  const finalPoints = earnedLoyaltyPoints && earnedLoyaltyPoints > 0 ? earnedLoyaltyPoints : expectedPoints;
 
   const displayOrderStatus: Api.OrderStatus = verificationPending
     ? (order?.status ?? 'PENDING')
@@ -1646,12 +1646,16 @@ export function PaymentCheckoutPhone({
                 <strong>
                   {isDemoMode
                     ? `Dự kiến tích lũy +${finalPoints} điểm thưởng (Mô phỏng)`
-                    : `Bạn vừa nhận được +${finalPoints} điểm tích lũy!`}
+                    : displayOrderStatus === 'COMPLETED' || (earnedLoyaltyPoints ?? 0) > 0
+                      ? `Bạn vừa nhận được +${finalPoints} điểm tích lũy!`
+                      : `Dự kiến tích lũy +${finalPoints} điểm thưởng khi đơn hoàn thành!`}
                 </strong>
                 <p>
                   {isDemoMode
                     ? 'Mô phỏng theo công thức: 10.000 ₫ = 1 điểm. Hệ thống chưa cộng vào cơ sở dữ liệu thật.'
-                    : 'Đã ghi nhận điểm thưởng thành công vào tài khoản của bạn.'}
+                    : displayOrderStatus === 'COMPLETED' || (earnedLoyaltyPoints ?? 0) > 0
+                      ? 'Đã ghi nhận điểm thưởng thành công vào tài khoản của bạn.'
+                      : 'Điểm thưởng sẽ được cộng tự động vào tài khoản khi đơn hàng hoàn thành (COMPLETED).'}
                 </p>
               </div>
             </div>

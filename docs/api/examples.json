@@ -903,7 +903,7 @@
               }
             ]
           },
-          "loyaltyPointsEarned": 10
+          "loyaltyPointsEarned": 0
         },
         "headers": {
           "Idempotency-Replayed": false
@@ -1045,7 +1045,7 @@
               }
             ]
           },
-          "loyaltyPointsEarned": 10
+          "loyaltyPointsEarned": 0
         },
         "headers": {
           "Idempotency-Replayed": true
@@ -1187,7 +1187,7 @@
               }
             ]
           },
-          "loyaltyPointsEarned": 10
+          "loyaltyPointsEarned": 0
         },
         "headers": {
           "Idempotency-Replayed": false

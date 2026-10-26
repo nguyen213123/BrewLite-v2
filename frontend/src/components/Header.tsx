@@ -1,9 +1,16 @@
 'use client';
 
-import { useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { clearAuth, subscribeAuth, getAuthSnapshot, getAuthServerSnapshot } from '@/lib/auth';
+import { apiGet } from '@/lib/api';
+import {
+  clearAuth,
+  subscribeAuth,
+  getAuthSnapshot,
+  getAuthServerSnapshot,
+  updateUserPoints,
+} from '@/lib/auth';
 import { useCartStore, useCartHydrated, totalQty } from '@/lib/cart/cart-store';
 
 export default function Header() {
@@ -13,16 +20,50 @@ export default function Header() {
   const lines = useCartStore((s) => s.lines);
   const hydrated = useCartHydrated();
   const cartCount = hydrated ? totalQty(lines) : 0;
+  const [menuOpen, setMenuOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    let ignore = false;
+    apiGet<{ points: number }>('/loyalty/me')
+      .then((res) => {
+        if (!ignore) updateUserPoints(res.points);
+      })
+      .catch(() => {});
+    return () => {
+      ignore = true;
+    };
+  }, [user?.id, pathname]);
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+    if (menuOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [menuOpen]);
 
   function handleLogout() {
+    setMenuOpen(false);
     clearAuth();
     router.push('/login');
   }
 
   const isMenuActive = pathname === '/' || pathname === '/menu' || pathname?.startsWith('/products');
   const isCartActive = pathname === '/cart' || pathname?.startsWith('/checkout');
-  const isOrdersActive = pathname?.startsWith('/orders');
-  const isLoyaltyActive = pathname?.startsWith('/loyalty');
+  const isProfileActive =
+    pathname?.startsWith('/profile') ||
+    pathname?.startsWith('/orders') ||
+    pathname?.startsWith('/loyalty');
+
+  const displayName = user?.email ? user.email.split('@')[0] || user.email : '';
 
   const navItemClass = (active?: boolean) =>
     `relative py-1.5 text-sm font-semibold transition ${
@@ -33,18 +74,23 @@ export default function Header() {
 
   return (
     <header className="sticky top-0 z-50 shadow-xs">
-      {/* Thanh tiện ích nâu phía trên cùng (Top Utility Bar) giống mẫu thiết kế */}
+      {/* Thanh tiện ích nâu phía trên cùng (Top Utility Bar) */}
       <div className="bg-[#6d4c3d] text-[#faf6ec]">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-1.5 text-[11px]">
           <div className="flex flex-wrap items-center gap-4 opacity-90">
             <span>☕ BrewLite — Trà Sữa &amp; Cà Phê Mộc Vị</span>
             <span className="hidden sm:inline">·</span>
-            <span className="hidden sm:inline">Đặt món trực tuyến &amp; Thanh toán không tiền mặt</span>
+            <span className="hidden sm:inline">
+              Đặt món trực tuyến &amp; Thanh toán không tiền mặt
+            </span>
           </div>
 
           <div className="flex items-center gap-3">
             {user && (
-              <div className="flex items-center gap-2">
+              <Link
+                href="/profile"
+                className="flex items-center gap-2 no-underline transition hover:opacity-90"
+              >
                 <span className="max-w-[140px] truncate font-medium text-[#cbe8d3]">
                   {user.email}
                 </span>
@@ -53,13 +99,10 @@ export default function Header() {
                     STAFF
                   </span>
                 )}
-                <Link
-                  href="/loyalty"
-                  className="rounded-full bg-[#cbe8d3] px-2 py-0.5 text-[10px] font-bold text-[#2d6a4f] transition hover:bg-white"
-                >
+                <span className="rounded-full bg-[#cbe8d3] px-2 py-0.5 text-[10px] font-bold text-[#2d6a4f]">
                   ★ {user.loyaltyPoints} điểm
-                </Link>
-              </div>
+                </span>
+              </Link>
             )}
 
             <div className="hidden items-center gap-1.5 sm:flex" aria-label="Mạng xã hội">
@@ -116,18 +159,9 @@ export default function Header() {
             <Link href="/menu" className={navItemClass(isMenuActive)}>
               Thực Đơn
             </Link>
-            <Link href="/cart" className={navItemClass(isCartActive)}>
-              Giỏ Hàng ({cartCount})
-            </Link>
-            <Link href="/orders" className={navItemClass(isOrdersActive)}>
-              Đơn Hàng
-            </Link>
-            <Link href="/loyalty" className={navItemClass(isLoyaltyActive)}>
-              Tích Điểm
-            </Link>
           </nav>
 
-          {/* Cụm nút hành động bên phải (viền tròn kiểu pill giống mẫu) */}
+          {/* Cụm nút hành động bên phải */}
           <div className="flex items-center gap-2.5">
             <Link
               href="/cart"
@@ -140,9 +174,7 @@ export default function Header() {
               <span>Giỏ hàng</span>
               <span
                 className={`inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-extrabold ${
-                  isCartActive
-                    ? 'bg-white text-[#6d4c3d]'
-                    : 'bg-[#6d4c3d] text-white'
+                  isCartActive ? 'bg-white text-[#6d4c3d]' : 'bg-[#6d4c3d] text-white'
                 }`}
               >
                 {cartCount}
@@ -150,13 +182,86 @@ export default function Header() {
             </Link>
 
             {user ? (
-              <button
-                type="button"
-                onClick={handleLogout}
-                className="rounded-full border border-[#decbb4] bg-[#efe5d4] px-4 py-1.5 text-xs font-bold text-[#4a2e20] transition hover:border-[#6d4c3d] hover:bg-[#6d4c3d] hover:text-white"
-              >
-                Đăng xuất
-              </button>
+              <div className="relative" ref={dropdownRef}>
+                <button
+                  type="button"
+                  onClick={() => setMenuOpen((prev) => !prev)}
+                  aria-expanded={menuOpen}
+                  className={`inline-flex items-center gap-2 rounded-full border-2 px-3.5 py-1.5 text-xs font-bold transition ${
+                    isProfileActive || menuOpen
+                      ? 'border-[#6d4c3d] bg-[#6d4c3d] text-white'
+                      : 'border-[#decbb4] bg-[#efe5d4] text-[#4a2e20] hover:border-[#6d4c3d]'
+                  }`}
+                  style={{ margin: 0 }}
+                >
+                  <span className="grid size-5 place-items-center rounded-full bg-[#cbe8d3] text-[10px] font-extrabold uppercase text-[#2d6a4f]">
+                    {displayName.slice(0, 1) || 'U'}
+                  </span>
+                  <span className="max-w-[110px] truncate">{displayName}</span>
+                  <span className="rounded-full bg-[#cbe8d3] px-2 py-0.5 text-[10px] font-extrabold text-[#2d6a4f]">
+                    ★ {user.loyaltyPoints}
+                  </span>
+                  <span aria-hidden="true" className="text-[10px] opacity-80">
+                    ▾
+                  </span>
+                </button>
+
+                {menuOpen && (
+                  <div className="absolute right-0 mt-2 w-68 overflow-hidden rounded-2xl border border-[#decbb4] bg-white shadow-lg">
+                    <div className="border-b border-[#decbb4] bg-[#efe5d4] p-4">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="truncate text-sm font-extrabold text-[#4a2e20]">
+                          {displayName}
+                        </span>
+                        <span className="rounded-full bg-[#cbe8d3] px-2.5 py-0.5 text-xs font-bold text-[#2d6a4f]">
+                          ★ {user.loyaltyPoints} điểm
+                        </span>
+                      </div>
+                      <p className="m-0 mt-1 truncate text-xs text-[#7a6254]">{user.email}</p>
+                    </div>
+
+                    <div className="p-2 text-xs font-bold text-[#4a2e20]">
+                      <Link
+                        href="/profile"
+                        onClick={() => setMenuOpen(false)}
+                        className="flex items-center justify-between rounded-xl px-3 py-2.5 no-underline transition hover:bg-[#efe5d4]"
+                      >
+                        <span>👤 Hồ sơ người dùng</span>
+                        <span className="text-[#7a6254]">→</span>
+                      </Link>
+                      <Link
+                        href="/profile?tab=orders"
+                        onClick={() => setMenuOpen(false)}
+                        className="flex items-center justify-between rounded-xl px-3 py-2.5 no-underline transition hover:bg-[#efe5d4]"
+                      >
+                        <span>📦 Lịch sử đơn hàng</span>
+                        <span className="text-[#7a6254]">→</span>
+                      </Link>
+                      <Link
+                        href="/profile?tab=loyalty"
+                        onClick={() => setMenuOpen(false)}
+                        className="flex items-center justify-between rounded-xl px-3 py-2.5 no-underline transition hover:bg-[#efe5d4]"
+                      >
+                        <span>★ Điểm thưởng tích lũy</span>
+                        <span className="rounded-full bg-[#cbe8d3] px-2 py-0.5 text-[10px] font-bold text-[#2d6a4f]">
+                          {user.loyaltyPoints} điểm
+                        </span>
+                      </Link>
+                    </div>
+
+                    <div className="border-t border-[#decbb4] p-2">
+                      <button
+                        type="button"
+                        onClick={handleLogout}
+                        className="w-full rounded-xl bg-[#fbeaea] px-3 py-2 text-left text-xs font-bold text-[#9b2c2c] transition hover:bg-[#f5d5d5]"
+                        style={{ margin: 0, border: 'none' }}
+                      >
+                        Đăng xuất tài khoản
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
             ) : (
               <div className="flex items-center gap-2">
                 <Link
@@ -186,12 +291,11 @@ export default function Header() {
             <Link href="/cart" className={navItemClass(isCartActive)}>
               Giỏ Hàng ({cartCount})
             </Link>
-            <Link href="/orders" className={navItemClass(isOrdersActive)}>
-              Đơn Hàng
-            </Link>
-            <Link href="/loyalty" className={navItemClass(isLoyaltyActive)}>
-              Tích Điểm
-            </Link>
+            {user && (
+              <Link href="/profile" className={navItemClass(isProfileActive)}>
+                Hồ Sơ ({displayName})
+              </Link>
+            )}
           </nav>
         </div>
       </div>

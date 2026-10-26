@@ -1,7 +1,7 @@
 // Owner: TV1 — #14. Validate/tính giảm giá; reserve/release nhận transaction từ caller (TV3/TV5).
 import { Injectable } from '@nestjs/common';
 import { CatalogPricingPort, PromotionsPort, PromotionRulesPort } from '../../common/contracts/ports';
-import type { Tx, PromotionSnapshot } from '../../common/contracts/ports';
+import type { ActivePromotion, Tx, PromotionSnapshot } from '../../common/contracts/ports';
 import type * as Api from '../../common/contracts/api.generated';
 import { ApiError } from '../../common/errors/api-error';
 import { UnitOfWork } from '../../common/database/unit-of-work';
@@ -15,6 +15,35 @@ const exhaustedPromotion = () => new ApiError(409, 'PROMOTION_EXHAUSTED', 'Mã k
 @Injectable()
 export class PromotionsService implements PromotionsPort, PromotionRulesPort {
   constructor(private readonly catalog: CatalogPricingPort, private readonly unitOfWork: UnitOfWork) {}
+
+  /** GET /promotions — lấy danh sách mã khuyến mãi đang hoạt động trực tiếp từ bảng Promotion trong DB. */
+  listActive(): Promise<ActivePromotion[]> {
+    return this.unitOfWork.run(async tx => {
+      const now = new Date();
+      const rows = await tx.promotion.findMany({
+        where: {
+          active: true,
+          startsAt: { lte: now },
+          endsAt: { gt: now },
+        },
+        orderBy: [{ minSubtotal: 'asc' }, { code: 'asc' }],
+      });
+      return rows
+        .filter(p => p.maxUses === null || p.usedCount < p.maxUses)
+        .map(p => ({
+          id: p.id,
+          code: p.code,
+          type: p.type,
+          value: p.value,
+          minSubtotal: p.minSubtotal,
+          maxDiscount: p.maxDiscount,
+          maxUses: p.maxUses,
+          usedCount: p.usedCount,
+          startsAt: p.startsAt.toISOString(),
+          endsAt: p.endsAt.toISOString(),
+        }));
+    });
+  }
 
   /** POST /promotions/validate — không giữ lượt, subtotal luôn tính từ catalog. */
   validate(_userId: string, input: Api.PromotionValidationRequest): Promise<Api.PromotionValidation> {
