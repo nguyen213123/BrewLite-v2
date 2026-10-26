@@ -170,6 +170,42 @@ it('[P1] FAIL -> retry timeout -> verify confirms PAYMENT_FAILED allows retry wi
   assert.equal(session.snapshot().order?.status, 'PAID');
   assert.equal(h.settled.length, 1);
 });
+it('[Issue 1] restores CANCELLED order: GET error keeps session and allows verify; recovered GET confirms CANCELLED and allows startOver', async () => {
+  const h = setup(), session = h.make();
+  await session.create(request, purchased);
+  h.status('CANCELLED');
+  await session.verify();
+  assert.equal(session.snapshot().verified, true);
+  assert.equal(session.snapshot().order?.status, 'CANCELLED');
+
+  // Khởi tạo lại session từ storage (như khi mở lại checkout / reload)
+  const reloaded = h.make();
+  assert.equal(reloaded.snapshot().verified, false);
+  assert.equal(reloaded.snapshot().order?.status, 'CANCELLED');
+  // Khi chưa xác minh, không cho bắt đầu đơn mới
+  assert.throws(() => reloaded.startOver(), /Cần xác minh hoặc hủy đơn/);
+
+  // GET xác minh gặp lỗi mạng
+  h.deps.find = async () => { throw new Error('NETWORK_TIMEOUT'); };
+  await assert.rejects(reloaded.verify(), /NETWORK_TIMEOUT/);
+  // Giữ session và verified vẫn là false
+  assert.equal(reloaded.snapshot().verified, false);
+  assert.equal(reloaded.snapshot().orderId, pending.id);
+  assert.equal(reloaded.snapshot().order?.status, 'CANCELLED');
+  assert.throws(() => reloaded.startOver(), /Cần xác minh hoặc hủy đơn/);
+
+  // Mạng phục hồi, GET trả CANCELLED
+  h.deps.find = async (id: string) => ({ ...pending, id, status: 'CANCELLED', reservationStatus: 'RELEASED' });
+  const fresh = await reloaded.verify();
+  assert.equal(fresh?.status, 'CANCELLED');
+  assert.equal(reloaded.snapshot().verified, true);
+  assert.equal(reloaded.snapshot().order?.status, 'CANCELLED');
+
+  // Bắt đầu đơn mới thành công
+  reloaded.startOver();
+  assert.equal(reloaded.snapshot().orderId, undefined);
+  assert.equal(reloaded.snapshot().order, undefined);
+});
 it('logout during a request suppresses late cart side effects', async () => {
   const h = setup(), session = h.make(); await session.create(request, purchased);
   h.deps.pay = async () => { h.logout(); h.status('PAID'); return {} as PaymentResult; };

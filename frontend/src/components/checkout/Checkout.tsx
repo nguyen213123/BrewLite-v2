@@ -60,6 +60,26 @@ function computePromoDiscount(promo: DbPromotion, subtotal: number): number {
   return Math.min(discount, subtotal);
 }
 
+type OrderWithPaymentData = Order & {
+  paymentMethod?: PaymentMethod | null;
+  method?: PaymentMethod | null;
+  payment?: { method?: PaymentMethod | null } | null;
+  payments?: Array<{ method?: PaymentMethod | null }> | null;
+};
+
+export function getConfirmedPaymentMethod(
+  order?: Order | null,
+  attempt?: { request?: { method?: PaymentMethod } } | null,
+): PaymentMethod | undefined {
+  const o = order as OrderWithPaymentData | undefined;
+  if (o?.paymentMethod) return o.paymentMethod;
+  if (o?.method) return o.method;
+  if (o?.payment?.method) return o.payment.method;
+  if (o?.payments && o.payments.length > 0 && o.payments[0]?.method) return o.payments[0].method;
+  if (attempt?.request?.method) return attempt.request.method;
+  return undefined;
+}
+
 function formatPromoTitle(promo: DbPromotion): string {
   if (promo.type === 'FIXED') return `Giảm ${formatVnd(promo.value)}`;
   return promo.maxDiscount !== null
@@ -215,6 +235,7 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
   const needsPriceConfirm = Boolean(
     state.verified && order?.status === 'PENDING' && priceCheck.changed && !state.priceAcknowledged,
   );
+  const confirmedPaymentMethod = getConfirmedPaymentMethod(order, state.attempt);
 
   useEffect(() => {
     lifecycle.setActive(true);
@@ -682,7 +703,11 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
                   <div className="flex items-center justify-between text-[#7a6254]">
                     <span>Phương thức:</span>
                     <span className="font-bold text-[#4a2e20]">
-                      {method === 'WALLET' ? 'Ví điện tử' : 'Thẻ ngân hàng'}
+                      {confirmedPaymentMethod === 'WALLET'
+                        ? 'Ví điện tử'
+                        : confirmedPaymentMethod === 'CARD'
+                          ? 'Thẻ ngân hàng'
+                          : 'Chưa có thông tin'}
                     </span>
                   </div>
                   <div className="flex items-center justify-between text-[#7a6254]">
@@ -778,10 +803,14 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
                   <button
                     disabled={busy}
                     onClick={() => {
-                      session.startOver();
-                      setState(session.snapshot());
-                      setQuote(undefined);
-                      if (initialOrderId) router.replace('/checkout');
+                      try {
+                        session.startOver();
+                        setState(session.snapshot());
+                        setQuote(undefined);
+                        if (initialOrderId) router.replace('/checkout');
+                      } catch (e) {
+                        setError(describeCheckoutError(e).message);
+                      }
                     }}
                     style={{ margin: 0 }}
                     className="flex-1 rounded-full border border-[#decbb4] bg-white py-2.5 text-center text-xs font-bold text-[#4a2e20] transition hover:bg-gray-50"
@@ -937,8 +966,8 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
             </div>
           </div>
         </div>
-      ) : (!state.verified && order?.status === 'PAYMENT_FAILED') || (!state.verified && Boolean(state.attempt) && order?.status !== 'PENDING') ? (
-        /* MÀN HÌNH CHƯA XÁC NHẬN ĐƯỢC KẾT QUẢ THANH TOÁN (TIMEOUT / LỖI MẠNG) */
+      ) : (!state.verified && (order?.status === 'PAYMENT_FAILED' || order?.status === 'CANCELLED' || (Boolean(state.attempt) && order?.status !== 'PENDING'))) ? (
+        /* MÀN HÌNH CHƯA XÁC NHẬN ĐƯỢC TRẠNG THÁI ĐƠN HÀNG (TIMEOUT / LỖI MẠNG) */
         <div className="mx-auto mt-6 max-w-2xl space-y-6">
           <div className="overflow-hidden rounded-3xl border border-amber-300 bg-white shadow-md">
             {/* Header Hero */}
@@ -952,10 +981,14 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
                 Đang chờ xác minh
               </span>
               <h1 className="mt-3 text-2xl sm:text-3xl font-extrabold text-[#4a2e20]">
-                Chưa xác nhận được kết quả thanh toán
+                {order?.status === 'CANCELLED'
+                  ? 'Chưa xác nhận được trạng thái hủy đơn'
+                  : 'Chưa xác nhận được kết quả thanh toán'}
               </h1>
               <p className="mt-2 text-sm text-[#7a6254]">
-                Yêu cầu thanh toán đã được gửi đi nhưng hệ thống chưa thể xác nhận trạng thái cuối cùng do gián đoạn kết nối hoặc quá thời gian chờ (timeout).
+                {order?.status === 'CANCELLED'
+                  ? 'Dữ liệu đơn hàng chưa được xác minh từ máy chủ do lỗi mạng hoặc gián đoạn kết nối. Vui lòng bấm xác minh lại để cập nhật trạng thái mới nhất.'
+                  : 'Yêu cầu thanh toán đã được gửi đi nhưng hệ thống chưa thể xác nhận trạng thái cuối cùng do gián đoạn kết nối hoặc quá thời gian chờ (timeout).'}
               </p>
             </div>
 
@@ -967,7 +1000,9 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
                   <span className="text-base">🛡️</span> Giỏ hàng của bạn vẫn được giữ nguyên đầy đủ!
                 </p>
                 <p className="m-0 mt-1 text-[#2d6a4f]/90">
-                  Dữ liệu giỏ hàng, thông tin đơn và lượt áp dụng ưu đãi vẫn được bảo toàn an toàn. Hệ thống chưa xác nhận thành công hay thất bại nên chưa thực hiện trừ giỏ hàng.
+                  {order?.status === 'CANCELLED'
+                    ? 'Thông tin đơn hàng và giỏ hàng đang được giữ an toàn. Hệ thống cần xác nhận trạng thái đơn từ máy chủ trước khi bắt đầu đơn mới.'
+                    : 'Dữ liệu giỏ hàng, thông tin đơn và lượt áp dụng ưu đãi vẫn được bảo toàn an toàn. Hệ thống chưa xác nhận thành công hay thất bại nên chưa thực hiện trừ giỏ hàng.'}
                 </p>
               </div>
 
@@ -978,6 +1013,16 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
                   <span className="font-mono font-bold text-[#4a2e20]">{order?.code}</span>
                 </div>
                 <div className="mt-3 space-y-2 text-sm">
+                  <div className="flex items-center justify-between text-[#7a6254]">
+                    <span>Trạng thái ghi nhận:</span>
+                    <span className="font-bold text-[#4a2e20]">
+                      {order?.status === 'CANCELLED'
+                        ? 'Đã hủy (chưa xác minh lại)'
+                        : order?.status === 'PAYMENT_FAILED'
+                          ? 'Thất bại (chưa xác minh lại)'
+                          : order?.status ?? '---'}
+                    </span>
+                  </div>
                   <div className="flex items-center justify-between text-[#7a6254]">
                     <span>Số tiền cần thanh toán:</span>
                     <strong className="text-base font-extrabold text-[#6d4c3d]">
@@ -1002,7 +1047,7 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
                   )}
                 </div>
                 <p className="m-0 mt-3 border-t border-[#decbb4] pt-3 text-[11px] text-[#7a6254]">
-                  * Khóa thanh toán (Idempotency Key) và dữ liệu đang được giữ nguyên. Vui lòng bấm &ldquo;Xác minh lại trạng thái đơn&rdquo; để kiểm tra kết quả từ máy chủ.
+                  * Dữ liệu đang được giữ nguyên an toàn. Vui lòng bấm &ldquo;Xác minh lại trạng thái đơn&rdquo; để kiểm tra kết quả từ máy chủ.
                 </p>
               </div>
 
@@ -1037,8 +1082,8 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
             </div>
           </div>
         </div>
-      ) : order?.status === 'CANCELLED' ? (
-        /* MÀN HÌNH ĐƠN HÀNG ĐÃ HỦY */
+      ) : state.verified && order?.status === 'CANCELLED' ? (
+        /* MÀN HÌNH ĐƠN HÀNG ĐÃ HỦY (CHẮC CHẮN) */
         <div className="mx-auto mt-6 max-w-2xl space-y-6">
           <div className="overflow-hidden rounded-3xl border border-[#decbb4] bg-white p-8 text-center shadow-md">
             <div className="mx-auto mb-4 flex size-16 items-center justify-center rounded-full bg-gray-200 text-gray-600 text-2xl font-bold">
@@ -1058,16 +1103,27 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
                 Về thực đơn
               </Link>
               <button
-                disabled={busy}
+                disabled={busy || !state.verified}
                 onClick={() => {
-                  session.startOver();
-                  setState(session.snapshot());
-                  setQuote(undefined);
-                  if (initialOrderId) router.replace('/checkout');
+                  try {
+                    session.startOver();
+                    setState(session.snapshot());
+                    setQuote(undefined);
+                    if (initialOrderId) router.replace('/checkout');
+                  } catch (e) {
+                    setError(describeCheckoutError(e).message);
+                  }
                 }}
                 className="rounded-full border border-[#decbb4] bg-[#efe5d4] px-6 py-2.5 text-xs font-bold text-[#4a2e20] transition hover:bg-[#e2d2b8]"
               >
                 Bắt đầu đơn mới
+              </button>
+              <button
+                disabled={busy}
+                onClick={() => run(() => session.verify())}
+                className="rounded-full border border-[#decbb4] bg-white px-6 py-2.5 text-xs font-bold text-[#4a2e20] transition hover:bg-gray-50"
+              >
+                Xác minh lại
               </button>
             </div>
           </div>

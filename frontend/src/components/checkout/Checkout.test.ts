@@ -9,6 +9,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import ts from 'typescript';
 import { createCheckoutSession, createCheckoutLifecycle, paidStatuses } from '../../lib/checkout/session.ts';
 import type { CheckoutState } from '../../lib/checkout/session';
+import type { Order } from '../../lib/contracts/api.generated';
 
 it('restores CARD/FAIL controls from the saved attempt instead of displaying WALLET/SUCCESS', () => {
   const user = { id: 'user', email: 'review@example.com', role: 'CUSTOMER', loyaltyPoints: 0 };
@@ -392,4 +393,173 @@ it('[P2] renders expected points notice on PAID and completed notice on COMPLETE
     if (previousStorage) Object.defineProperty(globalThis, 'sessionStorage', previousStorage);
     else Reflect.deleteProperty(globalThis, 'sessionStorage');
   }
+});
+
+function renderCheckoutStatic(saved: CheckoutState, verifiedOverride?: boolean) {
+  const user = { id: 'user', email: 'review@example.com', role: 'CUSTOMER', loyaltyPoints: 25 };
+  const previousStorage = Object.getOwnPropertyDescriptor(globalThis, 'sessionStorage');
+  Object.defineProperty(globalThis, 'sessionStorage', {
+    configurable: true,
+    value: {
+      getItem: () => JSON.stringify(saved),
+      setItem() {},
+    },
+  });
+  try {
+    const nodeRequire = createRequire(import.meta.url);
+    const customRequire = (id: string) => {
+      if (id === 'react/jsx-runtime') return nodeRequire(id) as unknown;
+      if (id === 'react') return React;
+      if (id === 'next/link')
+        return {
+          __esModule: true,
+          default: (props: React.AnchorHTMLAttributes<HTMLAnchorElement>) =>
+            React.createElement('a', props, props.children),
+        };
+      if (id === 'next/navigation') return { useRouter: () => ({ replace() {} }) };
+      if (id === '@/lib/auth')
+        return {
+          getToken: () => 'token',
+          getUser: () => user,
+          getAuthSnapshot: () => user,
+          getAuthServerSnapshot: () => user,
+          subscribeAuth: () => () => {},
+          updateUserPoints() {},
+        };
+      if (id === '@/lib/cart/cart-store')
+        return {
+          useCartHydrated: () => true,
+          useCartStore: (selector: (state: { lines: [] }) => unknown) => selector({ lines: [] }),
+          toCartItems: () => [],
+        };
+      if (id === '@/lib/checkout/session') {
+        return {
+          createCheckoutSession: (uId: string, deps: Parameters<typeof createCheckoutSession>[1]) => {
+            const sess = createCheckoutSession(uId, deps);
+            if (verifiedOverride !== undefined) {
+              return {
+                ...sess,
+                snapshot: () => ({ ...saved, verified: verifiedOverride }),
+              };
+            }
+            return sess;
+          },
+          createCheckoutLifecycle,
+          paidStatuses,
+        };
+      }
+      if (id === '@/lib/checkout/errors')
+        return {
+          describeCheckoutError: (e: unknown) => ({ message: String(e) }),
+          comparePrice: () => ({ changed: false, orderTotal: 0, difference: 0 }),
+        };
+      if (id === '@/lib/api') return {};
+      if (id === '@/components/payments/payment-api') return { formatVnd: (amount: number) => `${amount} VND` };
+      throw new Error(`Unexpected module: ${id}`);
+    };
+    const filename = fileURLToPath(new URL('./Checkout.tsx', import.meta.url));
+    const js = ts.transpileModule(readFileSync(filename, 'utf8'), {
+      compilerOptions: {
+        module: ts.ModuleKind.CommonJS,
+        target: ts.ScriptTarget.ES2022,
+        jsx: ts.JsxEmit.ReactJSX,
+        esModuleInterop: true,
+      },
+    }).outputText;
+    const compiledModule = { exports: {} as { default: React.ComponentType } };
+    const evaluate = runInThisContext(`(function(require,module,exports){${js}\n})`, { filename }) as (
+      require: typeof customRequire,
+      compiled: { exports: object },
+      exports: object,
+    ) => void;
+    evaluate(customRequire, compiledModule, compiledModule.exports);
+    return renderToStaticMarkup(React.createElement(compiledModule.exports.default));
+  } finally {
+    if (previousStorage) Object.defineProperty(globalThis, 'sessionStorage', previousStorage);
+    else Reflect.deleteProperty(globalThis, 'sessionStorage');
+  }
+}
+
+it('[Issue 1] unverified CANCELLED order renders unverified screen with verify button and no confirmed cancellation', () => {
+  const saved: CheckoutState = {
+    userId: 'user',
+    purchased: [],
+    orderId: 'cancelled-order-1',
+    order: {
+      id: 'cancelled-order-1',
+      code: 'BL-CANCELLED-001',
+      status: 'CANCELLED',
+      reservationStatus: 'RELEASED',
+      version: 3,
+      subtotal: 100000,
+      discount: 0,
+      total: 100000,
+      currency: 'VND',
+      promotionCode: null,
+      createdAt: '',
+      updatedAt: '',
+      items: [],
+    },
+  };
+  // Khi chưa xác minh (verified: false), phải hiển thị màn hình Chưa xác nhận và nút Xác minh lại
+  const html = renderCheckoutStatic(saved);
+  assert.match(html, /Chưa xác nhận/);
+  assert.match(html, /Xác minh lại trạng thái đơn/);
+  // Không được hiển thị màn hình hủy thành công khi chưa verify
+  assert.doesNotMatch(html, /Đơn hàng đã được hủy/);
+});
+
+it('[Issue 2] receipt displays CARD method when opened from history without attempt', () => {
+  const saved: CheckoutState = {
+    userId: 'user',
+    purchased: [],
+    orderId: 'paid-card-order',
+    order: {
+      id: 'paid-card-order',
+      code: 'BL-PAID-CARD',
+      status: 'PAID',
+      reservationStatus: 'CONSUMED',
+      version: 2,
+      subtotal: 120000,
+      discount: 0,
+      total: 120000,
+      currency: 'VND',
+      promotionCode: null,
+      createdAt: '',
+      updatedAt: '',
+      items: [],
+      paymentMethod: 'CARD',
+    } as unknown as Order,
+  };
+  const html = renderCheckoutStatic(saved, true);
+  // Mở từ lịch sử khi không có attempt: đơn thanh toán CARD phải hiển thị Thẻ ngân hàng, không được mặc định Ví điện tử
+  assert.match(html, /Thẻ ngân hàng/);
+  assert.doesNotMatch(html, /Ví điện tử/);
+});
+
+it('[Issue 2] receipt displays "Chưa có thông tin" when opened from history without attempt and no payment method data', () => {
+  const saved: CheckoutState = {
+    userId: 'user',
+    purchased: [],
+    orderId: 'paid-unknown-order',
+    order: {
+      id: 'paid-unknown-order',
+      code: 'BL-PAID-UNKNOWN',
+      status: 'PAID',
+      reservationStatus: 'CONSUMED',
+      version: 2,
+      subtotal: 120000,
+      discount: 0,
+      total: 120000,
+      currency: 'VND',
+      promotionCode: null,
+      createdAt: '',
+      updatedAt: '',
+      items: [],
+    },
+  };
+  const html = renderCheckoutStatic(saved, true);
+  // Mở từ lịch sử khi chưa biết phương thức: hiển thị "Chưa có thông tin", không mặc định Ví điện tử
+  assert.match(html, /Chưa có thông tin/);
+  assert.doesNotMatch(html, /Ví điện tử/);
 });
