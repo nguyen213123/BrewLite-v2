@@ -76,6 +76,26 @@ integration('Inventory on PostgreSQL: transaction + optimistic locking', () => {
     await promise.catch((error: ApiError) => expect(error.getResponse()).toMatchObject({ code }));
   }
 
+  it('missing legacy hold snapshot rolls back the cancellation, event, stock and reservation change', async () => {
+    const product = await newProduct(8);
+    const order = await prisma.order.create({
+      data: {
+        code: `BL-${randomBytes(4).toString('hex').toUpperCase()}`,
+        userId: testUser.id, subtotal: 100000, total: 100000,
+        items: { create: [{ productId: product.id, productName: 'Legacy order', size: 'M', sizePrice: 50000, unitPrice: 50000, qty: 2, lineTotal: 100000 }] },
+      },
+      include: { items: { include: { toppings: true } } },
+    });
+    await expectApiCode(unitOfWork.run(async tx => {
+      await tx.order.update({ where: { id: order.id }, data: { status: 'CANCELLED', version: { increment: 1 } } });
+      await tx.orderEvent.create({ data: { orderId: order.id, actorUserId: testUser.id, fromStatus: 'PENDING', toStatus: 'CANCELLED', orderVersion: 1 } });
+      await inventory.release(tx, order);
+    }), 'STOCK_CONFLICT');
+    expect(await prisma.order.findUniqueOrThrow({ where: { id: order.id } })).toMatchObject({ status: 'PENDING', reservationStatus: 'HELD', version: 0 });
+    expect(await prisma.orderEvent.count({ where: { orderId: order.id } })).toBe(0);
+    expect(await stockOf(product.id)).toBe(8);
+  });
+
   it('stock=1 with 10 concurrent orders: exactly one holds the last cup', async () => {
     const product = await newProduct(1);
     const results = await Promise.allSettled(Array.from({ length: 10 }, () => reserve([[product.id, 1]])));

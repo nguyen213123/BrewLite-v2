@@ -45,7 +45,6 @@ integration('Shared schema/migration on PostgreSQL', () => {
       'LoyaltyEntry',
       'OrderEvent',
       'IdempotencyRecord',
-      'VnpayAttempt',
       'Ingredient',
       'ProductIngredient',
       'ToppingIngredient',

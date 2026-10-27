@@ -94,6 +94,8 @@ Khi đơn hàng rơi vào `PAYMENT_FAILED`, toàn bộ tồn kho nguyên liệu 
 
 ## Kiểm thử
 
+- `backend/test/inventory-upgrade.integration-spec.ts`: nâng cấp schema cũ có dữ liệu; chặn đơn còn giữ kho nhưng thiếu snapshot trước khi xóa `Product.stock`; cho phép nâng cấp sau khi đơn cũ đã xử lý xong, giữ lịch sử và snapshot của đơn dùng nguyên liệu. Kiểm tra cả database đã chạy migration xóa cột của bản PR trước.
+
 - `backend/test/recipe.e2e-spec.ts`: tính toán định lượng theo size (S/M/L), hệ số làm tròn lên (`Math.ceil`), nguyên liệu `PIECE` không nhân hệ số, công thức topping 1 phần, ước lượng số ly khả dụng theo công thức, gộp nguyên liệu khi món và topping cùng dùng chung nguyên liệu.
 - `backend/test/inventory-stock.e2e-spec.ts`: logic gộp nguyên liệu theo `ingredientId`, thứ tự duyệt tăng dần, thử lại theo `Ingredient.version`, `OUT_OF_STOCK` / `STOCK_CONFLICT`, ghi nhận snapshot `OrderIngredientHold` và `release` hoàn đúng lượng đã giữ một lần duy nhất (không cần database).
 - `backend/test/unit-of-work.e2e-spec.ts` (không cần database; `$transaction` giả có rollback thật): lỗi tạm thời rồi thành công, hết 3 lượt trả `STOCK_CONFLICT`, nguyên liệu đã trừ trước đó được rollback, không thử lại `OUT_OF_STOCK`/lock timeout/lỗi thường, bản ghi key idempotency được rollback cùng lần thử bị hủy.
@@ -121,9 +123,42 @@ docker compose exec db psql -U brewlite -d brewlite -c 'DROP DATABASE "brewlite_
 
 Với nguyên liệu đủ cho `N` ly, tổng số đơn giữ được hàng luôn `<= N` và lượng nguyên liệu còn lại tương ứng với `N` trừ số đơn thành công, không bao giờ âm. Khi tranh chấp cao, một số request có thể nhận `STOCK_CONFLICT` dù còn hàng; đó là kết quả hợp lệ và client gửi lại.
 
+## Nâng cấp database đang có dữ liệu
+
+Migration mới `20261027025000_guard_legacy_stock_holds` chạy sau khi tạo bảng công thức và **trước** `20261027030000_drop_product_stock` trên database nâng cấp từ main cũ. Không sửa nội dung hoặc checksum các migration đã có. Nếu một đơn PENDING/PAID/PREPARING/READY còn HELD/CONSUMED nhưng không có `OrderIngredientHold`, migration dừng với `LEGACY_STOCK_HOLDS`; cột tồn kho cũ chưa bị xóa bởi bước tiếp theo.
+
+Không thể suy ra chính xác số nguyên liệu đã giữ cho đơn cũ từ công thức hiện tại. Vì vậy bản nâng cấp này chọn **chặn nâng cấp để xử lý đơn cũ an toàn**, không tự đoán lượng hoàn, không xóa đơn và không seed/reset dữ liệu phát triển.
+
+Trước khi triển khai:
+
+1. Sao lưu database. Tạm ngừng nhận đơn mới; dùng phiên bản cũ để hoàn tất hoặc hủy các đơn còn hoạt động. Các đơn PREPARING/READY phải hoàn tất theo State Machine, không cưỡng ép hủy.
+2. Kiểm tra các đơn cũ còn giữ kho bằng truy vấn dưới đây. Sau khi xử lý xong, dừng ghi dữ liệu từ phiên bản cũ trước khi chạy migration; không cho checkout chạy song song trong lúc đổi mô hình tồn kho.
+3. Chạy `npm --prefix backend run prisma:deploy`. Thiết lập công thức và tồn kho nguyên liệu dựa trên kiểm kê/nhập dữ liệu thực tế. Seed chỉ dành cho database demo có thể đặt lại, không dùng để chuyển đổi số dư cần giữ.
+4. Chạy lại kiểm tra catalog, tạo đơn, FAIL/retry/cancel và hoàn kho. Chỉ mở nhận đơn mới sau khi xác minh các luồng này.
+
+```sql
+SELECT id, code, status, "reservationStatus"
+FROM "Order"
+WHERE status IN ('PENDING', 'PAID', 'PREPARING', 'READY')
+  AND "reservationStatus" IN ('HELD', 'CONSUMED');
+```
+
+Nếu guard đã thất bại, trước hết xử lý nguyên nhân và kiểm tra dữ liệu. Sau đó đánh dấu **migration guard** được phép chạy lại và deploy; không đánh dấu `applied` để bỏ qua kiểm tra:
+
+```powershell
+Push-Location backend
+npx prisma migrate resolve --rolled-back 20261027025000_guard_legacy_stock_holds
+npm run prisma:deploy
+Pop-Location
+```
+
+Nếu database đã chạy migration xóa cột của bản PR trước, guard mới vẫn phát hiện đơn thiếu snapshot. Dữ liệu tồn kho đã mất không thể tự khôi phục: cần bản sao lưu hoặc đối soát lượng giữ thực tế trước khi bổ sung snapshot. Không chạy lại phiên bản cũ khi `Product.stock` đã bị xóa và không sửa trạng thái đơn thành RELEASED để vượt kiểm tra.
+
+Runtime cũng từ chối hoàn kho bằng `409 STOCK_CONFLICT` nếu đơn đang giữ kho nhưng thiếu snapshot; transaction rollback thay đổi trạng thái, event và các hiệu ứng liên quan. Đơn đã RELEASED vẫn là no-op như trước. Lịch sử COMPLETED/CANCELLED và PAYMENT_FAILED đã RELEASED không chặn nâng cấp.
+
 ## Kết quả chạy trên PostgreSQL thật
 
-Chạy trên PostgreSQL 17 của `docker compose` (service `db`), lệnh `npm run test:db` với `RUN_DB_TESTS=1`. Mỗi suite tự tạo database tạm `brewlite_test_<ngẫu nhiên>`, áp dụng đủ 5 bản migration và xóa sau khi xong. Toàn bộ 25 suite backend (427 tests) và 89 tests frontend đều đạt (0 fail, 0 warnings/errors).
+Ngày 27/10/2026: `npm run test:db` trên PostgreSQL 17 đạt **24 suite / 431 test backend và 89 test frontend**, không fail/skip. Test dùng database tạm và xóa sau khi xong; suite nâng cấp tạo schema theo từng giai đoạn để kiểm tra dữ liệu cũ. Có 5 migration. Không dùng số test mặc định bỏ qua DB để khẳng định đã nghiệm thu PostgreSQL. Các test cố ý mô phỏng lỗi server có log lỗi dự kiến; Node có cảnh báo module type, không ghi nhận chúng thành lỗi test.
 
 | Suite | Kịch bản | Kết quả kiểm chứng |
 | --- | --- | --- |

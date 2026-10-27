@@ -53,6 +53,12 @@ export class InventoryService implements InventoryPort {
       where: { orderId: order.id },
       orderBy: { ingredientId: 'asc' },
     });
+    if (holds.length === 0) {
+      // A legacy/incomplete upgrade must not silently "release" an order without
+      // returning its resources. The caller's transaction rolls the status flip
+      // and all other effects back, preserving the order for reconciliation.
+      throw new ApiError(409, 'STOCK_CONFLICT', 'Thiếu dữ liệu nguyên liệu đã giữ của đơn. Không thể hoàn kho an toàn; vui lòng liên hệ nhân viên.');
+    }
     const sortedHolds = [...holds].sort((a, b) =>
       a.ingredientId < b.ingredientId ? -1 : a.ingredientId > b.ingredientId ? 1 : 0,
     );

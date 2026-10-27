@@ -148,6 +148,8 @@ npm --prefix backend run seed
   - Seed sử dụng ID và mã cố định nên chạy lại nhiều lần **không nhân bản dữ liệu**, không xóa đơn hàng lịch sử và không xóa các dữ liệu ngoài danh sách seed.
   - **Cảnh báo:** Mỗi lần chạy lại seed, tồn kho (`stock`), phiên bản (`version`) của các nguyên liệu mẫu và số lượt đã dùng (`usedCount`) của mã khuyến mãi sẽ được **đặt lại về giá trị demo ban đầu**. Chỉ chạy seed trên database phát triển/demo; không chạy trên môi trường có dữ liệu thật cần giữ.
 
+**Nâng cấp từ phiên bản tồn kho theo sản phẩm:** đọc [quy trình nâng cấp](docs/requirements/inventory-concurrency.md#nâng-cấp-database-đang-có-dữ-liệu) trước khi deploy. Ngừng nhận đơn mới và xử lý các đơn cũ bằng phiên bản cũ, sau đó dừng ghi trong lúc migration. Migration guard dừng nếu còn đơn đang giữ kho nhưng chưa có snapshot nguyên liệu; không dùng seed để bỏ qua kiểm tra hoặc reset dữ liệu cần giữ.
+
 ---
 
 ## 🐳 Chạy toàn bộ bằng Docker Compose
@@ -193,8 +195,8 @@ Bạn có thể kiểm tra trực tiếp dữ liệu trong PostgreSQL bằng 3 c
 ### Chạy bộ kiểm thử tự động (Unit, E2E & Database Integration)
 
 ```powershell
-npm test          # Chạy 16 suite Backend + 89 test Frontend (Cart, Pricing, Recipe, Checkout, API Client)
-npm run test:db   # Chạy toàn bộ 25 suite Backend (427 tests) + 89 test Frontend trên PostgreSQL tạm, tự migrate và tự dọn DB sau khi xong
+npm test          # Backend + 89 test frontend; các suite PostgreSQL mặc định bỏ qua
+npm run test:db   # Toàn bộ 24 suite backend (431 tests) + 89 frontend trên PostgreSQL tạm, tự migrate và tự dọn DB
 npm run lint      # Kiểm tra ESLint (0 warnings/errors) cho cả Backend và Frontend
 npm run build     # Sinh Prisma Client và biên dịch Production cho cả hai ứng dụng
 npm run docs:check # Kiểm tra tính hợp lệ của OpenAPI 3.0, 37 fixtures và đối chiếu Prisma Schema với ERD
@@ -235,7 +237,7 @@ npm run qa:down        # Dọn dẹp riêng container, network và dữ liệu t
 | `npm run lint` | Kiểm tra quy chuẩn code (ESLint) cho cả hai ứng dụng |
 | `npm run build` | Generate Prisma Client và build production cho Backend & Frontend |
 | `npm test` | Kiểm thử HTTP, DTO, Guard, State Machine, Giỏ hàng và Checkout Session |
-| `npm run test:db` | Kiểm thử tích hợp toàn diện (385 backend tests + 76 frontend tests) với PostgreSQL thật |
+| `npm run test:db` | Kiểm thử toàn bộ 431 test backend và 89 frontend với PostgreSQL tạm riêng |
 | `npm run api:types` | Sinh tự động TypeScript types từ `docs/api/openapi.yaml` cho Backend & Frontend |
 | `npm run api:check` | Xác minh TypeScript types đã sinh khớp với hợp đồng OpenAPI |
 | `npm run docs:check` | Xác minh OpenAPI schema, fixtures ví dụ và đồng bộ schema Prisma với tài liệu ERD |

@@ -468,6 +468,16 @@ describe('InventoryService.reserve (trừ kho theo nguyên liệu + ghi OrderIng
 describe('InventoryService.release (hoàn kho đúng một lần từ OrderIngredientHold)', () => {
   const service = new InventoryService();
 
+  it('từ chối hoàn kho khi đơn còn giữ hàng nhưng không có snapshot nguyên liệu', async () => {
+    const db = fakeDb({
+      ingredients: { [ING_1]: { unit: 'GRAM', stock: 75, version: 1 } },
+      holds: [],
+      reservationStatus: 'HELD',
+    });
+    await expectCode(service.release(db.tx, storedOrder()), 409, 'STOCK_CONFLICT');
+    expect(db.ingredients.get(ING_1)).toMatchObject({ stock: 75, version: 1 });
+  });
+
   it('hoàn kho cho đơn HELD và chuyển reservationStatus sang RELEASED', async () => {
     const db = fakeDb({
       ingredients: {

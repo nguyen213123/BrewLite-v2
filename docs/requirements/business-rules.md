@@ -84,6 +84,7 @@ Theo đúng sơ đồ đề: mọi cạnh không có trong bảng đều bị `a
     1. Hoàn kho đúng một lần, chống trả lặp khi có nhiều request đồng thời hoặc retry.
     2. Nếu công thức nguyên liệu của món/topping bị thay đổi sau khi tạo đơn (ví dụ do cập nhật công thức hoặc seed lại), việc hoàn kho vẫn trả đúng lượng nguyên liệu thực tế đã trừ từ snapshot hold.
   - Thử lại thanh toán (`prepareRetry` khi từ `PAYMENT_FAILED` sang `PENDING`): xóa các dòng hold cũ của đơn trong `OrderIngredientHold`, trừ kho lại theo công thức hiện tại của các món và topping đã chọn, và ghi nhận snapshot hold mới.
+  - Đơn đang giữ kho nhưng thiếu snapshot không được coi là hoàn kho thành công: `release` trả `409 STOCK_CONFLICT` và transaction rollback. Migration chuyển mô hình phải chặn đơn cũ chưa xử lý xong trước khi xóa `Product.stock`; xem [quy trình nâng cấp](inventory-concurrency.md#nâng-cấp-database-đang-có-dữ-liệu).
 - Kiểm thử bắt buộc trên PostgreSQL thật: nguyên liệu đủ cho đúng 1 ly, 10 request tạo đơn đồng thời bằng idempotency key khác nhau, duy nhất 1 đơn thành công; kho nguyên liệu về 0 và không bao giờ âm. Đơn có nhiều dòng hoặc món và topping dùng chung nguyên liệu cũng không bao giờ vượt tồn.
 
 ## 6. Khuyến mãi và điểm thưởng
