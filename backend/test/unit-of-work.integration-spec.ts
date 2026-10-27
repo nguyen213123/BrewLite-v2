@@ -27,14 +27,20 @@ integration('UnitOfWork on PostgreSQL: deadlock victim is retried as a whole tra
     await tempDatabase?.drop();
   }, 60_000);
 
-  const newProduct = (stock: number) =>
-    prisma.product.create({
-      data: { name: `Deadlock test ${randomUUID().slice(0, 8)}`, description: 'Deadlock fixture', price: 45000, imageUrl: 'http://localhost/test.jpg', stock },
+  const newIngredient = (stock: number) =>
+    prisma.ingredient.create({
+      data: {
+        name: `Deadlock test ${randomUUID().slice(0, 8)}`,
+        unit: 'GRAM',
+        stock,
+        packageSize: 250,
+        packageLabel: 'túi',
+      },
     });
-  const stockOf = async (id: string) => (await prisma.product.findUniqueOrThrow({ where: { id } })).stock;
+  const stockOf = async (id: string) => (await prisma.ingredient.findUniqueOrThrow({ where: { id } })).stock;
 
   it('two transactions taking two products in opposite order: PostgreSQL aborts one, it is retried, both commit once', async () => {
-    const [first, second] = await Promise.all([newProduct(10), newProduct(10)]);
+    const [first, second] = await Promise.all([newIngredient(10), newIngredient(10)]);
 
     // Both transactions must hold their first row lock before either asks for the second one, which guarantees a deadlock.
     let arrivals = 0;
@@ -45,10 +51,10 @@ integration('UnitOfWork on PostgreSQL: deadlock victim is retried as a whole tra
     const worker = (name: 'x' | 'y', firstId: string, secondId: string) =>
       unitOfWork.run(async tx => {
         attempts[name]++;
-        await tx.product.update({ where: { id: firstId }, data: { stock: { decrement: 1 } } }); // takes the row lock
+        await tx.ingredient.update({ where: { id: firstId }, data: { stock: { decrement: 1 } } }); // takes the row lock
         if (++arrivals === 2) bothHoldFirstLock();
         await gate; // already open on a retry
-        await tx.product.update({ where: { id: secondId }, data: { stock: { decrement: 1 } } }); // opposite order: deadlock
+        await tx.ingredient.update({ where: { id: secondId }, data: { stock: { decrement: 1 } } }); // opposite order: deadlock
       });
 
     const results = await Promise.allSettled([worker('x', first.id, second.id), worker('y', second.id, first.id)]);

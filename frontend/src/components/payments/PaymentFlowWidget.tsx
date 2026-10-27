@@ -568,7 +568,7 @@ export function PaymentMethodSelector({
               </strong>
               <span>
                 {m === 'WALLET'
-                  ? 'MoMo / ZaloPay / VNPay QR — Thanh toán nhanh không tiền mặt'
+                  ? 'Ví điện tử (Cổng thanh toán mô phỏng)'
                   : 'Thẻ ATM nội địa / Visa / Mastercard (Cổng thanh toán mô phỏng)'}
               </span>
             </span>

@@ -191,6 +191,19 @@ describe('Public catalog API (database mocked)', () => {
       count: jest.fn().mockResolvedValue(1),
       findMany: jest.fn().mockResolvedValue([product]),
     },
+    productIngredient: {
+      findMany: jest.fn().mockResolvedValue([
+        {
+          productId,
+          ingredientId: '33333333-3333-4333-8333-333333333301',
+          amount: 1,
+          ingredient: { unit: 'PIECE', stock: 20 },
+        },
+      ]),
+    },
+    toppingIngredient: {
+      findMany: jest.fn().mockResolvedValue([]),
+    },
   };
 
   beforeAll(async () => {

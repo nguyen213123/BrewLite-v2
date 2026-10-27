@@ -6,7 +6,7 @@ import Link from 'next/link';
 import type { AddItemInput, AddItemResult } from '@/lib/cart/cart-store';
 import type { ProductDetail, Size } from '@/lib/contracts/api.generated';
 import { formatVnd } from './format';
-import { MAX_QTY_PER_LINE, priceSelection, toAddItemInput, validateSelection } from './pricing';
+import { maxQtyFor, priceSelection, toAddItemInput, validateSelection } from './pricing';
 
 type Props = { product: ProductDetail; onAddToCart: (input: AddItemInput) => AddItemResult };
 type Feedback = { kind: 'ok' | 'error'; text: string } | null;
@@ -26,8 +26,10 @@ export function ProductDetailView({ product, onAddToCart }: Props) {
   const [imageOk, setImageOk] = useState(true);
 
   const selection = { size, toppingIds, qty };
-  const soldOut = product.stock <= 0;
-  const maxQty = Math.max(1, Math.min(MAX_QTY_PER_LINE, product.stock));
+  const currentSize = product.sizes.find((s) => s.size === size);
+  const availableCups = currentSize ? currentSize.stock : product.stock;
+  const soldOut = product.stock <= 0 || availableCups <= 0;
+  const maxQty = Math.max(1, maxQtyFor(product, size, toppingIds));
   const priced = priceSelection(product, selection);
   const problem = validateSelection(product, selection);
 
@@ -101,7 +103,7 @@ export function ProductDetailView({ product, onAddToCart }: Props) {
                   </span>
                 ) : (
                   <span className="rounded-full bg-[#6d4c3d] px-3.5 py-1 text-xs font-bold text-white shadow-xs">
-                    Còn {product.stock} ly
+                    Còn {availableCups} ly
                   </span>
                 )}
               </div>
@@ -153,7 +155,10 @@ export function ProductDetailView({ product, onAddToCart }: Props) {
                       }}
                       className={choice(size === s.size)}
                     >
-                      <b className="text-sm">Size {s.size}</b>
+                      <b className="text-sm">
+                        Size {s.size}
+                        {s.stock <= 0 ? ' (Hết)' : ''}
+                      </b>
                       <span className="text-xs font-semibold text-[#6d4c3d]">
                         {formatVnd(s.price)}
                       </span>
@@ -175,13 +180,15 @@ export function ProductDetailView({ product, onAddToCart }: Props) {
                 <div className="grid gap-2.5 sm:grid-cols-2">
                   {product.toppings.map((t) => {
                     const on = toppingIds.includes(t.id);
+                    const isOutOfStock = t.stock <= 0;
                     return (
                       <button
                         key={t.id}
                         type="button"
                         aria-pressed={on}
+                        disabled={isOutOfStock}
                         onClick={() => toggleTopping(t.id)}
-                        className={choice(on)}
+                        className={`${choice(on)} ${isOutOfStock ? 'cursor-not-allowed opacity-50' : ''}`}
                       >
                         <span className="flex items-center gap-2.5">
                           <span
@@ -194,7 +201,10 @@ export function ProductDetailView({ product, onAddToCart }: Props) {
                           >
                             ✓
                           </span>
-                          <b className="text-sm">{t.name}</b>
+                          <b className="text-sm">
+                            {t.name}
+                            {isOutOfStock ? ' (Hết)' : ''}
+                          </b>
                         </span>
                         <span className="text-xs font-semibold text-[#6d4c3d]">
                           +{formatVnd(t.price)}
@@ -211,7 +221,7 @@ export function ProductDetailView({ product, onAddToCart }: Props) {
                 aria-hidden="true"
                 className={`size-2 rounded-full ${soldOut ? 'bg-[#9b2c2c]' : 'bg-[#2d6a4f]'}`}
               />
-              {soldOut ? 'Hết hàng' : `Còn ${product.stock} ly`} · Giá cuối cùng do hệ thống xác nhận khi đặt đơn.
+              {soldOut ? 'Hết hàng' : `Còn ${availableCups} ly`} · Giá cuối cùng do hệ thống xác nhận khi đặt đơn.
             </p>
 
             <div className="mt-5 flex flex-col gap-3 border-t border-[#decbb4]/80 pt-5 sm:flex-row">

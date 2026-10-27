@@ -29,6 +29,7 @@ Trạng thái 26/10/2026: toàn bộ 17 operation trong OpenAPI đã có impleme
 - JWT: `Authorization: Bearer <accessToken>`; xem chi tiết issuer/audience/expiry trong quy tắc nghiệp vụ.
 - Không bọc success bằng `data` trừ endpoint phân trang: `{ data: [...], meta: { page, limit, total, totalPages } }`. Mặc định page=1, limit=12, tối đa 50. Trang ngoài phạm vi trả data rỗng với tổng thật; dataset rỗng có totalPages=0.
 - UUID cho ID/key; timestamp UTC ISO 8601; tiền nguyên VND; size S/M/L; payment WALLET/CARD.
+- `ProductSummary.stock` và `ProductDetail.stock` là số ly size S còn pha được theo công thức và tồn kho nguyên liệu. `ProductDetail.sizes[]` có thêm `stock` cho từng size S/M/L, và `ProductDetail.toppings[]` dùng schema `ToppingOption` (`Topping` kèm `stock` số phần còn lại).
 - OrderRequest chỉ có items và promotionCode tùy chọn. Không dùng promotionCode=null/chuỗi rỗng; bỏ field nếu không có mã. toppingIds có thể bỏ và được chuẩn hóa thành []. Không gửi giá/userId từ client.
 - Body phải đúng schema, từ chối field thừa; query page/limit parse số nguyên rồi validate, từ chối query không được khai báo. Email và mã promo được chuẩn hóa trước validate nghiệp vụ; UUID/key viết lowercase chuẩn, password giữ nguyên.
 - `POST /orders` và `POST /payments` phải có Idempotency-Key UUID. Replay giữ HTTP status/body ban đầu, header Idempotency-Replayed=true; UI lấy lại order hiện tại sau replay.

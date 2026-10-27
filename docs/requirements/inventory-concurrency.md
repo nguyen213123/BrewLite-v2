@@ -1,37 +1,55 @@
 # Chiến lược tồn kho và xử lý đồng thời (Issue #9)
 
-Tài liệu này giải thích cách `InventoryService` (`backend/src/modules/inventory/`) giữ, trả tồn kho và chống bán vượt tồn. Nó **không đổi** ERD, API Contract hay quy tắc trong [business-rules.md](business-rules.md) §5; chỉ ghi lại cách hiện thực.
+Tài liệu này giải thích cách `InventoryService` (`backend/src/modules/inventory/`) quản lý tồn kho theo nguyên liệu và công thức món, giữ/hoàn kho nguyên tử và chống bán vượt tồn. Tài liệu hoàn toàn đồng bộ với [business-rules.md](business-rules.md) §5 và đặc tả thiết kế (spec A1–A7).
 
 ## Đơn vị tồn kho
 
-`Product.stock` là số ly còn bán được, dùng chung cho mọi size và topping. Mỗi `qty` trong đơn tiêu thụ đúng một ly. Không có kho riêng cho topping hay nguyên liệu. Cột `stock` có CHECK `>= 0` ở mức database làm lớp bảo vệ cuối cùng.
+Tồn kho được quản lý tập trung ở mức nguyên liệu (`Ingredient`), lưu trữ theo đơn vị đo lường gốc: `GRAM`, `ML`, `PIECE`. Cột `Ingredient.stock` có ràng buộc `CHECK (stock >= 0)` ở mức database làm chốt chặn bảo vệ cuối cùng. Cột `Product.stock` đã được loại bỏ khỏi database.
+
+- Mỗi nguyên liệu có `packageSize` (CHECK `> 0`) và `packageLabel` (ví dụ 250 g/"túi", 1000 ml/"hộp").
+- **Công thức món (`ProductIngredient`)** quy định định lượng nguyên liệu cho size S (`amount > 0`).
+- **Hệ số kích cỡ (`SIZE_FACTOR_PCT`)**: S = 100%, M = 125%, L = 150%. Định lượng theo size tính bằng:
+  `perCupAmount(amount, unit, size) = unit === 'PIECE' ? amount : Math.ceil(amount * SIZE_FACTOR_PCT[size] / 100)`.
+  Đơn vị `PIECE` (ví dụ chanh tươi) không nhân hệ số size (1 quả chanh luôn là 1 quả ở mọi size).
+- **Công thức topping (`ToppingIngredient`)** quy định định lượng cho 1 phần phục vụ (`amount > 0`), không nhân hệ số size.
+- **Số ly còn bán được của một size:** min trên mọi nguyên liệu trong công thức của $\lfloor stock / perCupAmount \rfloor$. Nếu công thức rỗng, trả về 0 (hết hàng).
+- **Số phần topping còn lại:** min trên mọi nguyên liệu trong công thức topping của $\lfloor stock / amount \rfloor$. Nếu công thức rỗng, trả về 0 (hết hàng).
+- `ProductSummary.stock` trả về qua API là số ly khả dụng của size S (luôn là giá trị lớn nhất trong ba size).
 
 ## Vòng đời giữ chỗ (`Order.reservationStatus`)
 
-| Thời điểm | Hiệu ứng lên tồn kho | Ai thực hiện |
+| Thời điểm | Hiệu ứng lên tồn kho nguyên liệu | Ai thực hiện |
 | --- | --- | --- |
-| Tạo đơn PENDING | `reserve`: trừ `stock`, đơn ở `HELD` | `InventoryPort.reserve` gọi trong transaction tạo đơn (#7) |
-| PENDING → PAID | Không đổi `stock`; `HELD` → `CONSUMED` | Dịch vụ chuyển trạng thái (#8) |
-| PENDING → PAYMENT_FAILED, hủy đơn | `release`: cộng lại `stock`, `HELD` → `RELEASED` | `InventoryPort.release` |
-| PAID → CANCELLED (trước PREPARING) | `release`: cộng lại `stock`, `CONSUMED` → `RELEASED` | `InventoryPort.release` |
-| PAYMENT_FAILED → PENDING (thử lại) | `reserve` lại, `RELEASED` → `HELD`, cùng một transaction | Dịch vụ chuyển trạng thái (#8) gọi `reserve` |
-| PAYMENT_FAILED → CANCELLED | Không trả lần hai (đã `RELEASED`) | `release` là no-op |
+| Tạo đơn PENDING | `reserve`: trừ `Ingredient.stock`, lưu snapshot vào `OrderIngredientHold`, đơn ở `HELD` | `InventoryPort.reserve` gọi trong transaction tạo đơn |
+| PENDING → PAID | Không đổi tồn kho nguyên liệu; `HELD` → `CONSUMED` | Dịch vụ chuyển trạng thái đơn hàng |
+| PENDING → PAYMENT_FAILED, hủy đơn | `release`: chuyển có điều kiện `HELD` → `RELEASED`, hoàn lại đúng lượng nguyên liệu từ `OrderIngredientHold` | `InventoryPort.release` |
+| PAID → CANCELLED (trước PREPARING) | `release`: chuyển có điều kiện `CONSUMED` → `RELEASED`, hoàn lại đúng lượng nguyên liệu từ `OrderIngredientHold` | `InventoryPort.release` |
+| PAYMENT_FAILED → PENDING (thử lại) | `prepareRetry`: xóa hold cũ, `reserve` lại nguyên liệu theo công thức hiện tại (bao gồm cả topping đã chọn), ghi hold mới, `RELEASED` → `HELD` | Dịch vụ chuyển trạng thái gọi `prepareRetry` |
+| PAYMENT_FAILED → CANCELLED | Không trả lần hai (đã `RELEASED`) | `release` là no-op (câu lệnh điều kiện khớp 0 dòng) |
+| Lời gọi trùng lặp (duplicate calls) | Cập nhật trạng thái có điều kiện ngăn chặn hoàn kho lặp | `release` kiểm tra `count === 0` và dừng ngay |
 
 ## `reserve`: transaction + optimistic locking
 
-`reserve(tx, items)` luôn chạy **bên trong transaction của người gọi** (tạo đơn, hoặc thử lại thanh toán). Nó không tự mở transaction, nên mọi thay đổi tồn kho nằm cùng một lần commit/rollback với đơn hàng, lượt khuyến mãi và idempotency key.
+`reserve(tx, orderId, items)` luôn chạy **bên trong transaction của người gọi** (khi tạo đơn hoặc khi thử lại thanh toán `prepareRetry`). Nó không tự mở transaction, nên mọi thay đổi tồn kho nằm cùng một lần commit/rollback với đơn hàng, lượt khuyến mãi và idempotency key.
 
-1. **Gộp qty theo `productId`** trước khi kiểm tra. Hai dòng cùng sản phẩm (khác size/topping) được cộng lại; nếu không, mỗi dòng đều "đủ hàng" riêng lẻ nhưng tổng thì vượt tồn.
-2. **Duyệt sản phẩm theo `productId` tăng dần.** Mọi request lấy khóa hàng theo cùng một thứ tự nên không tạo vòng chờ (deadlock).
-3. Với mỗi sản phẩm, tối đa **3 lần thử**:
-   - Đọc `stock`, `version`, `active`.
-   - Không tồn tại hoặc ngừng bán: `404 PRODUCT_NOT_FOUND`.
-   - `stock < qty`: `409 OUT_OF_STOCK`.
+1. **Kiểm tra công thức:** Mọi món và topping được chọn đều phải có công thức (`prepareRequired`). Món hoặc topping thiếu công thức bị từ chối ngay với `409 OUT_OF_STOCK` ("Không đủ nguyên liệu cho món đã chọn").
+2. **Gộp nguyên liệu theo `ingredientId`:**
+   - Với mỗi món: cộng `perCupAmount(amount, unit, size) * qty` cho từng nguyên liệu trong công thức món.
+   - Với mỗi topping đã chọn: cộng `amount * qty` cho từng nguyên liệu trong công thức topping.
+   - Gộp tổng nhu cầu theo `ingredientId`. Nếu món và topping cùng dùng chung một nguyên liệu (ví dụ Trà sữa trân châu và topping Trân châu đều dùng hạt trân châu), nhu cầu được cộng dồn chính xác trước khi giữ kho.
+3. **Duyệt nguyên liệu theo `ingredientId` tăng dần:** Mọi request đều khóa và cập nhật nguyên liệu theo cùng một thứ tự tăng dần của khóa chính, loại trừ hoàn toàn nguy cơ deadlock vòng giữa các transaction cạnh tranh.
+4. Với mỗi nguyên liệu, tối đa **3 lần thử (`MAX_STOCK_ATTEMPTS = 3`)**:
+   - Đọc `stock`, `version`.
+   - Nếu `stock < amount`: trả ngay `409 OUT_OF_STOCK` ("Không đủ nguyên liệu cho món đã chọn").
    - Cập nhật có điều kiện, nguyên tử trong một câu lệnh:
-     `UPDATE Product SET stock = stock - qty, version = version + 1 WHERE id = ? AND version = ? AND stock >= qty`.
-   - `count = 1`: thành công. `count = 0`: người khác vừa đổi dòng này, đọc lại và thử tiếp.
-4. Hết 3 lần vẫn thua cuộc đua: `409 STOCK_CONFLICT` (client được phép gửi lại với cùng Idempotency-Key). Thiếu hàng thật luôn trả `OUT_OF_STOCK`, không bị che bởi `STOCK_CONFLICT`.
-5. Mọi lỗi ném ra khỏi `reserve` làm transaction của người gọi **rollback toàn bộ**, kể cả các sản phẩm đã trừ trước đó trong cùng đơn. Đơn bị từ chối không để lại đơn dở dang hay tồn kho bị giữ.
+     `UPDATE Ingredient SET stock = stock - amount, version = version + 1 WHERE id = ? AND version = ? AND stock >= amount`.
+   - `count = 1`: thành công.
+   - `count = 0`: người khác vừa cập nhật dòng nguyên liệu này, đọc lại `stock`/`version` và thử tiếp.
+5. Hết 3 lần vẫn thua cuộc đua: trả `409 STOCK_CONFLICT` ("Tồn kho đang thay đổi, vui lòng thử lại"). Thiếu hàng thật luôn trả `409 OUT_OF_STOCK`, không bị che bởi `STOCK_CONFLICT`.
+6. **Lưu snapshot giữ kho (`OrderIngredientHold`):**
+   - Xóa các bản ghi hold cũ của đơn nếu có (`deleteMany where { orderId }`).
+   - Ghi nhận các dòng `OrderIngredientHold (orderId, ingredientId, amount)`.
+7. Mọi lỗi ném ra khỏi `reserve` làm transaction của người gọi **rollback toàn bộ**, kể cả các nguyên liệu đã trừ trước đó trong cùng đơn. Đơn bị từ chối không để lại đơn dở dang hay tồn kho bị giữ.
 
 ### Hai tầng thử lại
 
@@ -39,8 +57,8 @@ Baseline yêu cầu "retry toàn bộ transaction tối đa 3 lần cho xung đ�
 
 | Loại lỗi | Tầng thử lại | Vì sao |
 | --- | --- | --- |
-| Xung đột version: `UPDATE ... WHERE version = ?` khớp 0 dòng | Trong `InventoryService.holdProduct`, tối đa 3 lần, đọc lại `stock`/`version` mỗi lần | Ở `READ COMMITTED`, câu `UPDATE` bị từ chối nhẹ nhàng (0 dòng, không có lỗi database), transaction vẫn dùng được và `SELECT` kế tiếp thấy dữ liệu đã commit |
-| Deadlock (`40P01`), serialization failure (`40001`), Prisma `P2034` | `UnitOfWork.run`, **chạy lại toàn bộ transaction**, tối đa 3 lần | PostgreSQL đã hủy transaction; không thể thử lại câu lệnh bên trong nó. Mỗi lần là một transaction mới, đọc lại mọi dữ liệu, và các thay đổi của lần bị hủy (kể cả các sản phẩm đã trừ trước đó) đã bị database rollback |
+| Xung đột version: `UPDATE ... WHERE version = ?` khớp 0 dòng | Trong `InventoryService.holdIngredient`, tối đa 3 lần, đọc lại `stock`/`version` mỗi lần | Ở `READ COMMITTED`, câu `UPDATE` bị từ chối nhẹ nhàng (0 dòng, không có lỗi database), transaction vẫn dùng được và `SELECT` kế tiếp thấy dữ liệu đã commit |
+| Deadlock (`40P01`), serialization failure (`40001`), Prisma `P2034` | `UnitOfWork.run`, **chạy lại toàn bộ transaction**, tối đa 3 lần | PostgreSQL đã hủy transaction; không thể thử lại câu lệnh bên trong nó. Mỗi lần là một transaction mới, đọc lại mọi dữ liệu, và các thay đổi của lần bị hủy (kể cả các nguyên liệu đã trừ trước đó) đã bị database rollback |
 
 Hết lượt ở một trong hai tầng đều trả `409 STOCK_CONFLICT`; thiếu hàng thật luôn trả `409 OUT_OF_STOCK`. Không thử lại `lock_timeout` (3 giây), transaction timeout (5 giây) và mọi lỗi nghiệp vụ (`ApiError`): chúng được báo ngay (ví dụ `IDEMPOTENCY_IN_PROGRESS` do lớp idempotency xử lý).
 
@@ -50,20 +68,40 @@ Có tới 3 lần chạy callback, nên với người gọi `UnitOfWork.run` c�
 2. **Phối hợp với idempotency (TV5):** `IdempotencyPort.execute` phải chạy trong `UnitOfWork.run` (không tự mở `$transaction`) và chiếm Idempotency-Key **bên trong** `tx`. Khi một lần thử bị hủy, bản ghi key và mọi tác dụng phụ (kho, lượt ưu đãi, đơn, event) cùng bị rollback, lần thử sau chiếm key lại từ đầu, nên cùng một yêu cầu không bao giờ tạo hiệu ứng hai lần.
 3. Hết lượt, client được phép gửi lại với cùng Idempotency-Key.
 
-## `release`: chỉ trả một lần
+## `release`: snapshot hold & chỉ trả một lần
 
-`release(tx, order)` trước hết chuyển `reservationStatus` từ `HELD`/`CONSUMED` sang `RELEASED` bằng câu cập nhật có điều kiện. Nếu `count = 0` (đã `RELEASED`, do request khác hoặc lần gọi trước) thì **dừng, không cộng tồn kho**. Nếu `count = 1` thì cộng lại `qty` (đã gộp theo sản phẩm, theo thứ tự id tăng dần) và tăng `version`. Vì việc chuyển trạng thái và cộng tồn nằm cùng transaction, hai lần `release` đồng thời chỉ có một lần có hiệu lực. Nhờ vậy thanh toán lỗi lặp, hủy lặp hay request trùng không hoàn kho hai lần.
+`release(tx, order)` giải quyết trọn vẹn hai bài toán lớn trong quản lý tồn kho theo công thức:
 
-`release` chỉ đổi `reservationStatus`. `status` và `version` của đơn do dịch vụ chuyển trạng thái (#8) cập nhật.
+1. **Chống hoàn kho lặp:** Trước hết chuyển `reservationStatus` từ `HELD`/`CONSUMED` sang `RELEASED` bằng câu lệnh cập nhật có điều kiện:
+   `UPDATE Order SET reservationStatus = 'RELEASED' WHERE id = ? AND reservationStatus IN ('HELD', 'CONSUMED')`.
+   Nếu `count = 0` (đã `RELEASED`, do request khác hoặc lần gọi trước) thì **dừng ngay, không cộng tồn kho**.
+2. **Hoàn trả đúng lượng nguyên liệu thực tế đã giữ:** Nếu `count = 1`, hệ thống đọc danh sách giữ kho từ bảng snapshot `OrderIngredientHold` theo `orderId`, sắp xếp theo `ingredientId` tăng dần, sau đó hoàn trả chính xác số lượng `amount` cho từng `Ingredient.stock` và tăng `Ingredient.version`:
+   `UPDATE Ingredient SET stock = stock + amount, version = version + 1 WHERE id = ?`.
+   Nhờ có snapshot `OrderIngredientHold`, nếu công thức món hoặc topping bị thay đổi sau thời điểm tạo đơn (ví dụ do cập nhật danh mục hoặc nạp lại seed), hệ thống vẫn hoàn trả **đúng lượng nguyên liệu thực tế đã trừ**, không phụ thuộc vào công thức mới.
+
+`release` chỉ cập nhật `reservationStatus` và hoàn trả nguyên liệu. `status` và `version` của đơn do dịch vụ State Machine quản lý.
+
+## Thử lại thanh toán (`prepareRetry`)
+
+Khi đơn hàng rơi vào `PAYMENT_FAILED`, toàn bộ tồn kho nguyên liệu đã được hoàn trả (`RELEASED`). Khi khách hàng thực hiện thử lại thanh toán:
+
+1. Dịch vụ State Machine gọi `prepareRetry` kèm theo danh sách `items` chứa đầy đủ thông tin `productId`, `size`, `qty` và danh sách `toppingIds` đã chọn.
+2. `prepareRetry` chạy `reserve(tx, order.id, items)`:
+   - Xóa các dòng hold cũ của đơn trong `OrderIngredientHold`.
+   - Trừ kho nguyên liệu theo công thức hiện tại của các món kèm topping đã chọn.
+   - Ghi nhận snapshot hold mới vào `OrderIngredientHold`.
+3. Nếu không đủ nguyên liệu (do người khác đã mua hết trong lúc chờ thanh toán), transaction rollback và đơn vẫn giữ nguyên trạng thái `PAYMENT_FAILED`.
 
 ## Kiểm thử
 
-- `backend/test/inventory-stock.e2e-spec.ts`: logic gộp qty, thứ tự duyệt, thử lại theo version, `OUT_OF_STOCK`/`STOCK_CONFLICT`, `release` đúng một lần (không cần database).
-- `backend/test/unit-of-work.e2e-spec.ts` (không cần database; `$transaction` giả có rollback thật): lỗi tạm thời rồi thành công, hết 3 lượt trả `STOCK_CONFLICT`, sản phẩm đã trừ trước đó được rollback, không thử lại `OUT_OF_STOCK`/lock timeout/lỗi thường, bản ghi key idempotency được rollback cùng lần thử bị hủy.
-- `backend/test/inventory.integration-spec.ts` (PostgreSQL thật): 10 request cùng tranh `stock = 1`, 20 request tranh `stock = 5`, gộp dòng trùng sản phẩm, rollback nhiều sản phẩm và `release` đồng thời.
-- `backend/test/unit-of-work.integration-spec.ts` (PostgreSQL thật): hai transaction khóa hai sản phẩm theo thứ tự ngược nhau để tạo **deadlock thật**; PostgreSQL hủy một bên, `UnitOfWork` chạy lại nó, cả hai cùng commit và mỗi sản phẩm chỉ bị trừ đúng một lần cho mỗi bên.
+- `backend/test/inventory-upgrade.integration-spec.ts`: nâng cấp schema cũ có dữ liệu; chặn đơn còn giữ kho nhưng thiếu snapshot trước khi xóa `Product.stock`; cho phép nâng cấp sau khi đơn cũ đã xử lý xong, giữ lịch sử và snapshot của đơn dùng nguyên liệu. Kiểm tra cả database đã chạy migration xóa cột của bản PR trước.
 
-- `backend/test/orders-create.integration-spec.ts` (PostgreSQL thật): `OrdersService.create`, `InventoryService`, `OrderTransactionsService` và `UnitOfWork` thật (chỉ catalog, khuyến mãi và lớp idempotency của module khác được thay bằng bản tối thiểu). 10 đơn tranh `stock = 1`, 20 đơn tranh `stock = 5`, hai đơn 2 ly tranh `stock = 3`, đơn bị từ chối không để lại đơn hay tồn kho bị giữ, và tạo rồi hủy trả đúng số ly đã giữ.
+- `backend/test/recipe.e2e-spec.ts`: tính toán định lượng theo size (S/M/L), hệ số làm tròn lên (`Math.ceil`), nguyên liệu `PIECE` không nhân hệ số, công thức topping 1 phần, ước lượng số ly khả dụng theo công thức, gộp nguyên liệu khi món và topping cùng dùng chung nguyên liệu.
+- `backend/test/inventory-stock.e2e-spec.ts`: logic gộp nguyên liệu theo `ingredientId`, thứ tự duyệt tăng dần, thử lại theo `Ingredient.version`, `OUT_OF_STOCK` / `STOCK_CONFLICT`, ghi nhận snapshot `OrderIngredientHold` và `release` hoàn đúng lượng đã giữ một lần duy nhất (không cần database).
+- `backend/test/unit-of-work.e2e-spec.ts` (không cần database; `$transaction` giả có rollback thật): lỗi tạm thời rồi thành công, hết 3 lượt trả `STOCK_CONFLICT`, nguyên liệu đã trừ trước đó được rollback, không thử lại `OUT_OF_STOCK`/lock timeout/lỗi thường, bản ghi key idempotency được rollback cùng lần thử bị hủy.
+- `backend/test/inventory.integration-spec.ts` (PostgreSQL thật): tranh chấp nguyên liệu đồng thời, đơn có hai dòng cùng nguyên liệu, hai nguyên liệu với nguyên liệu thứ hai hết hàng thì nguyên liệu thứ nhất được rollback, đơn và topping cùng dùng nguyên liệu được gộp chính xác, và `release` đồng thời chỉ hoàn một lần.
+- `backend/test/unit-of-work.integration-spec.ts` (PostgreSQL thật): hai transaction khóa hai nguyên liệu theo thứ tự ngược nhau để tạo **deadlock thật**; PostgreSQL hủy một bên, `UnitOfWork` chạy lại nó, cả hai cùng commit và mỗi nguyên liệu chỉ bị trừ đúng một lần cho mỗi bên.
+- `backend/test/orders-create.integration-spec.ts` (PostgreSQL thật): `OrdersService.create`, `InventoryService`, `OrderTransactionsService` và `UnitOfWork` thật. 10 đơn tranh nguyên liệu cho 1 ly, 20 đơn tranh 5 ly, đơn bị từ chối không để lại đơn hay tồn kho bị giữ, tạo rồi hủy trả đúng số nguyên liệu đã giữ từ `OrderIngredientHold`.
 
 Các suite PostgreSQL tự tạo một database tạm `brewlite_test_<ngẫu nhiên>` (áp dụng đủ migration bằng `prisma migrate deploy`), ghi toàn bộ dữ liệu mẫu vào đó và xóa nó trong `afterAll`, kể cả khi test thất bại. `DATABASE_URL` chỉ dùng để kết nối tới server PostgreSQL (chạy `CREATE/DROP DATABASE`); **không có dữ liệu mẫu nào được ghi vào database phát triển**. Cần role có quyền `CREATEDB` (role `brewlite` của `docker compose` và của CI đã có) và PostgreSQL 13 trở lên. Chỉ chấp nhận máy chủ cục bộ (`localhost`, `127.0.0.1`).
 
@@ -71,7 +109,7 @@ Các suite PostgreSQL tự tạo một database tạm `brewlite_test_<ngẫu nhi
 docker compose up -d db
 $env:DATABASE_URL = "<giá trị trong backend/.env>"
 $env:RUN_DB_TESTS = "1"
-npm --prefix backend test -- inventory.integration unit-of-work.integration
+npm --prefix backend test -- inventory.integration unit-of-work.integration orders-create.integration
 Remove-Item Env:RUN_DB_TESTS
 Remove-Item Env:DATABASE_URL
 ```
@@ -83,19 +121,51 @@ docker compose exec db psql -U brewlite -d brewlite -c "SELECT datname FROM pg_d
 docker compose exec db psql -U brewlite -d brewlite -c 'DROP DATABASE "brewlite_test_xxxxxxxxxxxx" WITH (FORCE);'
 ```
 
-Với `stock = N`, tổng số đơn giữ được hàng luôn `<= N` và `stock` cuối cùng bằng `N` trừ số đơn thành công, không bao giờ âm. Khi tranh chấp cao, một số request có thể nhận `STOCK_CONFLICT` dù còn hàng; đó là kết quả hợp lệ và client gửi lại.
+Với nguyên liệu đủ cho `N` ly, tổng số đơn giữ được hàng luôn `<= N` và lượng nguyên liệu còn lại tương ứng với `N` trừ số đơn thành công, không bao giờ âm. Khi tranh chấp cao, một số request có thể nhận `STOCK_CONFLICT` dù còn hàng; đó là kết quả hợp lệ và client gửi lại.
+
+## Nâng cấp database đang có dữ liệu
+
+Migration mới `20261027025000_guard_legacy_stock_holds` chạy sau khi tạo bảng công thức và **trước** `20261027030000_drop_product_stock` trên database nâng cấp từ main cũ. Không sửa nội dung hoặc checksum các migration đã có. Nếu một đơn PENDING/PAID/PREPARING/READY còn HELD/CONSUMED nhưng không có `OrderIngredientHold`, migration dừng với `LEGACY_STOCK_HOLDS`; cột tồn kho cũ chưa bị xóa bởi bước tiếp theo.
+
+Không thể suy ra chính xác số nguyên liệu đã giữ cho đơn cũ từ công thức hiện tại. Vì vậy bản nâng cấp này chọn **chặn nâng cấp để xử lý đơn cũ an toàn**, không tự đoán lượng hoàn, không xóa đơn và không seed/reset dữ liệu phát triển.
+
+Trước khi triển khai:
+
+1. Sao lưu database. Tạm ngừng nhận đơn mới; dùng phiên bản cũ để hoàn tất hoặc hủy các đơn còn hoạt động. Các đơn PREPARING/READY phải hoàn tất theo State Machine, không cưỡng ép hủy.
+2. Kiểm tra các đơn cũ còn giữ kho bằng truy vấn dưới đây. Sau khi xử lý xong, dừng ghi dữ liệu từ phiên bản cũ trước khi chạy migration; không cho checkout chạy song song trong lúc đổi mô hình tồn kho.
+3. Chạy `npm --prefix backend run prisma:deploy`. Thiết lập công thức và tồn kho nguyên liệu dựa trên kiểm kê/nhập dữ liệu thực tế. Seed chỉ dành cho database demo có thể đặt lại, không dùng để chuyển đổi số dư cần giữ.
+4. Chạy lại kiểm tra catalog, tạo đơn, FAIL/retry/cancel và hoàn kho. Chỉ mở nhận đơn mới sau khi xác minh các luồng này.
+
+```sql
+SELECT id, code, status, "reservationStatus"
+FROM "Order"
+WHERE status IN ('PENDING', 'PAID', 'PREPARING', 'READY')
+  AND "reservationStatus" IN ('HELD', 'CONSUMED');
+```
+
+Nếu guard đã thất bại, trước hết xử lý nguyên nhân và kiểm tra dữ liệu. Sau đó đánh dấu **migration guard** được phép chạy lại và deploy; không đánh dấu `applied` để bỏ qua kiểm tra:
+
+```powershell
+Push-Location backend
+npx prisma migrate resolve --rolled-back 20261027025000_guard_legacy_stock_holds
+npm run prisma:deploy
+Pop-Location
+```
+
+Nếu database đã chạy migration xóa cột của bản PR trước, guard mới vẫn phát hiện đơn thiếu snapshot. Dữ liệu tồn kho đã mất không thể tự khôi phục: cần bản sao lưu hoặc đối soát lượng giữ thực tế trước khi bổ sung snapshot. Không chạy lại phiên bản cũ khi `Product.stock` đã bị xóa và không sửa trạng thái đơn thành RELEASED để vượt kiểm tra.
+
+Runtime cũng từ chối hoàn kho bằng `409 STOCK_CONFLICT` nếu đơn đang giữ kho nhưng thiếu snapshot; transaction rollback thay đổi trạng thái, event và các hiệu ứng liên quan. Đơn đã RELEASED vẫn là no-op như trước. Lịch sử COMPLETED/CANCELLED và PAYMENT_FAILED đã RELEASED không chặn nâng cấp.
 
 ## Kết quả chạy trên PostgreSQL thật
 
-Chạy ngày 24/10/2026 trên PostgreSQL 17 của `docker compose` (service `db`), lệnh `npm --prefix backend test -- inventory.integration unit-of-work.integration` với `RUN_DB_TESTS=1`. Mỗi suite tự tạo database tạm `brewlite_test_<ngẫu nhiên>`, áp dụng đủ migration và xóa sau khi xong. Kết quả: 2 suite, 6/6 test đạt (tổng 26,2 giây). Sau khi chạy, truy vấn `pg_database` không còn database `brewlite_test_%` nào (0 dòng), và database phát triển `brewlite` không nhận dữ liệu mẫu.
+Ngày 27/10/2026: `npm run test:db` trên PostgreSQL 17 đạt **24 suite / 431 test backend và 89 test frontend**, không fail/skip. Test dùng database tạm và xóa sau khi xong; suite nâng cấp tạo schema theo từng giai đoạn để kiểm tra dữ liệu cũ. Có 5 migration. Không dùng số test mặc định bỏ qua DB để khẳng định đã nghiệm thu PostgreSQL. Các test cố ý mô phỏng lỗi server có log lỗi dự kiến; Node có cảnh báo module type, không ghi nhận chúng thành lỗi test.
 
 | Suite | Kịch bản | Kết quả kiểm chứng |
 | --- | --- | --- |
-| `inventory.integration` | `stock = 1`, 10 request đồng thời | Đúng 1 request giữ được, 9 request bị từ chối (`OUT_OF_STOCK` hoặc `STOCK_CONFLICT`), `stock` cuối = 0 |
-| `inventory.integration` | `stock = 5`, 20 request đồng thời | Số request thành công từ 1 đến 5, `stock` cuối bằng 5 trừ số request thành công, không âm |
-| `inventory.integration` | Đơn có hai dòng cùng sản phẩm, tổng vượt tồn | `OUT_OF_STOCK`, `stock` không đổi |
-| `inventory.integration` | Hai sản phẩm, sản phẩm thứ hai hết hàng | `OUT_OF_STOCK`, lượt giữ ở sản phẩm thứ nhất được rollback |
-| `inventory.integration` | Cùng một đơn `release` 3 lần đồng thời | `stock` tăng đúng một lần, đơn ở `RELEASED` |
-| `unit-of-work.integration` | Hai transaction khóa hai sản phẩm theo thứ tự ngược nhau (deadlock thật) | PostgreSQL hủy một bên, `UnitOfWork` chạy lại, cả hai cùng commit; tổng số lần chạy callback ít nhất 3; mỗi sản phẩm bị trừ đúng một lần cho mỗi bên (10 xuống 8) |
-
-Các kịch bản không đồng thời của `UnitOfWork` (hết 3 lượt trả `STOCK_CONFLICT`, rollback sản phẩm đã trừ trước đó, không thử lại lỗi nghiệp vụ, rollback bản ghi idempotency cùng lần thử bị hủy) được kiểm chứng ở `unit-of-work.e2e-spec.ts` bằng `$transaction` giả có rollback, vì không thể ép PostgreSQL deadlock đủ 3 lần liên tiếp một cách ổn định. Luồng tạo đơn qua `OrdersService.create` được kiểm chứng riêng ở `orders-create.integration-spec.ts`; luồng thanh toán của TV5 chưa nằm trong các test này và cần chạy lại khi được nối.
+| `inventory.integration` | Nguyên liệu đủ 1 ly, 10 request đồng thời | Đúng 1 request giữ được, 9 request bị từ chối (`OUT_OF_STOCK` hoặc `STOCK_CONFLICT`), tồn kho cuối về 0 |
+| `inventory.integration` | Nguyên liệu đủ 5 ly, 20 request đồng thời | Số request thành công từ 1 đến 5, nguyên liệu còn lại chính xác, không âm |
+| `inventory.integration` | Đơn có hai dòng cùng dùng một nguyên liệu, tổng vượt tồn | `OUT_OF_STOCK`, nguyên liệu không đổi |
+| `inventory.integration` | Hai nguyên liệu, nguyên liệu thứ hai hết hàng | `OUT_OF_STOCK`, lượt giữ ở nguyên liệu thứ nhất được rollback |
+| `inventory.integration` | Món và topping cùng dùng chung nguyên liệu (Trà sữa trân châu + Trân châu) | Nhu cầu nguyên liệu được gộp chính xác, trừ kho đúng tổng lượng |
+| `inventory.integration` | Cùng một đơn `release` 3 lần đồng thời | Nguyên liệu tăng đúng một lần theo `OrderIngredientHold`, đơn ở `RELEASED` |
+| `unit-of-work.integration` | Hai transaction khóa hai nguyên liệu theo thứ tự ngược nhau (deadlock thật) | PostgreSQL hủy một bên, `UnitOfWork` chạy lại, cả hai cùng commit; tổng số lần chạy callback ít nhất 3; mỗi nguyên liệu bị trừ đúng một lần cho mỗi bên |
