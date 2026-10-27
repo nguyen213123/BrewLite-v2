@@ -8,6 +8,7 @@ import { ApiError } from '../src/common/errors/api-error';
 import type * as Api from '../src/common/contracts/api.generated';
 import type { Tx } from '../src/common/contracts/ports';
 import { createTempDatabase, type TempDatabase } from './support/temp-database';
+import { seedSingleIngredientProduct, stockOfProduct } from './support/recipe-fixtures';
 
 // Order creation + stock holding on real PostgreSQL (Issues #7 and #9): many POST /orders racing for the last cups.
 // Real OrdersService, InventoryService, OrderTransactionsService and UnitOfWork. Only catalog pricing, promotions and the
@@ -55,12 +56,18 @@ integration('POST /orders holds stock on PostgreSQL', () => {
     await tempDatabase?.drop();
   }, 60_000);
 
-  const newProduct = (stock: number, id: string = randomUUID()) =>
-    prisma.product.create({
-      data: { id, name: `Create test ${id.slice(0, 8)}`, description: 'Order creation fixture', price: 45000, imageUrl: 'http://localhost/test.jpg', stock },
+  const newProduct = async (stockCups: number, id: string = randomUUID()) => {
+    const res = await seedSingleIngredientProduct(prisma, {
+      productId: id,
+      stockCups,
+      size: 'M',
+      cupAmount: 18,
+      unit: 'GRAM',
     });
+    return res.product;
+  };
   const newUser = () => prisma.user.create({ data: { email: `${randomUUID()}@example.com`, passwordHash: 'test-only-not-an-auth-account' } });
-  const stockOf = async (id: string) => (await prisma.product.findUniqueOrThrow({ where: { id } })).stock;
+  const stockOf = async (id: string) => stockOfProduct(prisma, id, 'M');
   const place = (userId: string, lines: Array<[string, number]>) =>
     orders.create(userId, randomUUID(), { items: lines.map(([productId, qty]) => ({ productId, size: 'M' as const, qty })) });
   const codeOf = (result: PromiseRejectedResult) => ((result.reason as ApiError).getResponse() as { code: string }).code;

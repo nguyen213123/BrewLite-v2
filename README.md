@@ -27,7 +27,7 @@ Dự án được phát triển cho nhóm 6 thành viên với kiến trúc tác
 | Tầng (Layer) | Công nghệ chính | Vai trò trong dự án |
 | --- | --- | --- |
 | **Frontend (`frontend/`)** | Next.js 16 (App Router), React 19, TypeScript, TailwindCSS v4, Zustand | Giao diện người dùng hiện đại (Xanh Mint Pastel `#cbe8d3`, Kem Cát `#faf6ec` / `#efe5d4`, Nâu Cà Phê `#6d4c3d`), lưu giỏ hàng bền vững (`localStorage`) và quản lý phiên thanh toán an toàn (`sessionStorage`). |
-| **Backend (`backend/`)** | NestJS 11, TypeScript, Prisma ORM 7, Passport JWT, class-validator | Xử lý toàn bộ quy tắc nghiệp vụ: báo giá server-side, giữ/trả kho (`UnitOfWork` transaction), State Machine đơn hàng, Idempotency (`CREATE_ORDER`, `PAY_ORDER`), khuyến mãi và sổ cái điểm thưởng (`EARN` / `REVERSE`). |
+| **Backend (`backend/`)** | NestJS 11, TypeScript, Prisma ORM 7, Passport JWT, class-validator | Xử lý toàn bộ quy tắc nghiệp vụ: báo giá server-side, định lượng công thức món & topping, giữ/trả kho theo nguyên liệu (Optimistic Locking & `UnitOfWork` transaction), State Machine đơn hàng, Idempotency (`CREATE_ORDER`, `PAY_ORDER`), khuyến mãi và sổ cái điểm thưởng (`EARN` / `REVERSE`). |
 | **Database (`db`)** | PostgreSQL 17 | Lưu trữ bền vững với ràng buộc toàn vẹn (`CHECK`, `UNIQUE`, khóa ngoại) và kiểm soát tranh chấp tồn kho/phiên bản đơn hàng. |
 | **Hạ tầng & QA** | Docker Compose, GitHub Actions CI, OpenAPI / AJV Contract Check | Đóng gói đa container, kiểm tra hợp đồng API tự động và môi trường QA độc lập (`tmpfs`). |
 
@@ -42,7 +42,7 @@ Toàn bộ các trang được thiết kế đồng bộ theo bảng màu **Brew
 | Đường dẫn (Route) | Trang chức năng | Mô tả chi tiết |
 | --- | --- | --- |
 | `/` hoặc `/menu` | **Trang chủ & Thực đơn** | Hero banner BrewLite, danh sách đồ uống phân trang (`GET /api/products`), bộ khung thẻ kem cát và giới thiệu thương hiệu. |
-| `/products/[id]` | **Chi tiết đồ uống** | Chọn kích cỡ bắt buộc (`S` / `M` / `L`), chọn nhiều topping tùy ý, chỉnh số lượng theo tồn kho, tính giá tạm tính và thêm vào giỏ. |
+| `/products/[id]` | **Chi tiết đồ uống** | Chọn kích cỡ bắt buộc (`S` / `M` / `L`), chọn nhiều topping tùy ý, tự động tính số ly tồn kho theo size đang chọn, kiểm tra tồn kho topping, giới hạn số lượng theo nguyên liệu khả dụng, tính giá tạm tính và thêm vào giỏ. |
 | `/cart` | **Giỏ hàng** | Quản lý danh sách món đã chọn, gộp dòng cùng cấu hình, tăng/giảm số lượng (`1–99`), xem tạm tính và điểm thưởng dự kiến. |
 | `/checkout` | **Thanh toán & Đặt đơn** | Tiến trình 3 bước: **(1)** Kiểm tra giỏ & Báo giá khuyến mãi → **(2)** Tạo đơn giữ hàng & Thanh toán mô phỏng Ví/Thẻ (`SUCCESS` / `FAIL`) → **(3)** Xác nhận kết quả & Tích điểm. |
 | `/orders` | **Lịch sử đơn hàng** | Danh sách các đơn đã đặt của tài khoản (`GET /api/orders/me`), hiển thị trạng thái đơn, trạng thái giữ kho và mã ưu đãi. |
@@ -140,13 +140,13 @@ npm --prefix backend run build:seed
 npm --prefix backend run seed
 ```
 
-- **Nội dung Seed:** Tạo hoặc cập nhật **17 sản phẩm đồ uống** (kèm hình ảnh thực tế tại `/images/*.jpg`), **5 loại topping**, đầy đủ **kích thước S / M / L** và **3 mã khuyến mãi**:
+- **Nội dung Seed:** Khởi tạo dữ liệu nền tảng gồm **20 nguyên liệu pha chế** (`Ingredient`), công thức định lượng món cho cả **17 sản phẩm đồ uống** (`ProductIngredient`, chuẩn size S) và công thức cho toàn bộ **5 loại topping** (`ToppingIngredient`, 1 phần). Đồng thời nạp đầy đủ hình ảnh thực tế tại `/images/*.jpg`, các kích thước S / M / L (`ProductSize`) và **3 mã khuyến mãi**:
   - `SAVE10`: Giảm 10% (tối đa `30.000 ₫`, áp dụng cho đơn từ `50.000 ₫`).
   - `BREW20K`: Giảm trực tiếp `20.000 ₫` (áp dụng cho đơn từ `100.000 ₫`).
   - `FREETOPPING`: Giảm trực tiếp `10.000 ₫` (không yêu cầu giá trị đơn tối thiểu).
 - **Tính chất Idempotent & Lưu ý:**
-  - Seed sử dụng ID và mã cố định nên chạy lại nhiều lần **không nhân bản dữ liệu**, không xóa đơn hàng lịch sử và không xóa các sản phẩm/mã ngoài danh sách seed.
-  - **Cảnh báo:** Mỗi lần chạy lại seed, tồn kho (`stock`), phiên bản (`version`) của sản phẩm mẫu và số lượt đã dùng (`usedCount`) của mã khuyến mãi sẽ được **đặt lại về giá trị demo ban đầu**. Chỉ chạy seed trên database phát triển/demo; không chạy trên môi trường có dữ liệu thật cần giữ.
+  - Seed sử dụng ID và mã cố định nên chạy lại nhiều lần **không nhân bản dữ liệu**, không xóa đơn hàng lịch sử và không xóa các dữ liệu ngoài danh sách seed.
+  - **Cảnh báo:** Mỗi lần chạy lại seed, tồn kho (`stock`), phiên bản (`version`) của các nguyên liệu mẫu và số lượt đã dùng (`usedCount`) của mã khuyến mãi sẽ được **đặt lại về giá trị demo ban đầu**. Chỉ chạy seed trên database phát triển/demo; không chạy trên môi trường có dữ liệu thật cần giữ.
 
 ---
 
@@ -174,7 +174,7 @@ Bạn có thể kiểm tra trực tiếp dữ liệu trong PostgreSQL bằng 3 c
    ```powershell
    npm run db:studio
    ```
-   Trình duyệt sẽ mở tại **`http://localhost:5555`**, cho phép xem và lọc trực tiếp tất cả các bảng (`User`, `Product`, `ProductSize`, `Topping`, `Order`, `OrderItem`, `Payment`, `Promotion`, `LoyaltyLedger`, `IdempotencyRecord`).
+   Trình duyệt sẽ mở tại **`http://localhost:5555`**, cho phép xem và lọc trực tiếp tất cả các bảng (`User`, `Product`, `ProductSize`, `Topping`, `Ingredient`, `ProductIngredient`, `ToppingIngredient`, `Order`, `OrderItem`, `OrderIngredientHold`, `Payment`, `Promotion`, `LoyaltyLedger`, `IdempotencyRecord`).
 
 2. **Dùng phần mềm quản lý DB (DBeaver, pgAdmin, TablePlus, DataGrip):**
    - **Host:** `localhost` | **Port:** `5432`
@@ -193,8 +193,8 @@ Bạn có thể kiểm tra trực tiếp dữ liệu trong PostgreSQL bằng 3 c
 ### Chạy bộ kiểm thử tự động (Unit, E2E & Database Integration)
 
 ```powershell
-npm test          # Chạy 14 suite Backend + 76 test Frontend (Cart, Pricing, Checkout, API Client)
-npm run test:db   # Chạy toàn bộ 22 suite Backend (385 tests) trên PostgreSQL tạm, tự migrate và tự dọn DB sau khi xong
+npm test          # Chạy 16 suite Backend + 89 test Frontend (Cart, Pricing, Recipe, Checkout, API Client)
+npm run test:db   # Chạy toàn bộ 25 suite Backend (427 tests) + 89 test Frontend trên PostgreSQL tạm, tự migrate và tự dọn DB sau khi xong
 npm run lint      # Kiểm tra ESLint (0 warnings/errors) cho cả Backend và Frontend
 npm run build     # Sinh Prisma Client và biên dịch Production cho cả hai ứng dụng
 npm run docs:check # Kiểm tra tính hợp lệ của OpenAPI 3.0, 37 fixtures và đối chiếu Prisma Schema với ERD

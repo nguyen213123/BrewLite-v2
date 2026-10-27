@@ -56,6 +56,11 @@ enum IdempotencyStatus {
   PROCESSING
   COMPLETED
 }
+enum IngredientUnit {
+  GRAM
+  ML
+  PIECE
+}
 
 model User {
   id             String              @id @default(uuid()) @db.Uuid
@@ -76,13 +81,13 @@ model Product {
   description String           @db.VarChar(1000)
   price       Int
   imageUrl    String           @db.VarChar(2048)
-  stock       Int              @default(0)
   version     Int              @default(0)
   active      Boolean          @default(true)
   createdAt   DateTime         @default(now())
   sizes       ProductSize[]
   toppings    ProductTopping[]
   orderItems  OrderItem[]
+  ingredients ProductIngredient[]
 }
 
 model ProductSize {
@@ -101,6 +106,7 @@ model Topping {
   active      Boolean            @default(true)
   products    ProductTopping[]
   orderItems  OrderItemTopping[]
+  ingredients ToppingIngredient[]
 }
 
 model ProductTopping {
@@ -147,6 +153,7 @@ model Order {
   payments          Payment[]
   loyaltyEntries    LoyaltyEntry[]
   events            OrderEvent[]
+  ingredientHolds   OrderIngredientHold[]
   @@index([userId, createdAt, id])
   @@index([status, createdAt])
 }
@@ -233,6 +240,48 @@ model IdempotencyRecord {
   @@unique([userId, scope, key])
 }
 
+model Ingredient {
+  id           String                @id @default(uuid()) @db.Uuid
+  name         String                @db.VarChar(120)
+  unit         IngredientUnit
+  stock        Int                   @default(0)
+  packageSize  Int
+  packageLabel String                @db.VarChar(20)
+  version      Int                   @default(0)
+  products     ProductIngredient[]
+  toppings     ToppingIngredient[]
+  holds        OrderIngredientHold[]
+}
+
+model ProductIngredient {
+  productId    String     @db.Uuid
+  ingredientId String     @db.Uuid
+  amount       Int
+  product      Product    @relation(fields: [productId], references: [id], onDelete: Restrict)
+  ingredient   Ingredient @relation(fields: [ingredientId], references: [id], onDelete: Restrict)
+
+  @@id([productId, ingredientId])
+}
+
+model ToppingIngredient {
+  toppingId    String     @db.Uuid
+  ingredientId String     @db.Uuid
+  amount       Int
+  topping      Topping    @relation(fields: [toppingId], references: [id], onDelete: Restrict)
+  ingredient   Ingredient @relation(fields: [ingredientId], references: [id], onDelete: Restrict)
+
+  @@id([toppingId, ingredientId])
+}
+
+model OrderIngredientHold {
+  orderId      String     @db.Uuid
+  ingredientId String     @db.Uuid
+  amount       Int
+  order        Order      @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  ingredient   Ingredient @relation(fields: [ingredientId], references: [id], onDelete: Restrict)
+
+  @@id([orderId, ingredientId])
+}
 model SystemCheck {
   id        Int      @id @default(autoincrement())
   createdAt DateTime @default(now())

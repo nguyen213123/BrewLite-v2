@@ -81,7 +81,13 @@ export class OrderTransactionsService implements OrderTransactionsPort {
     }
     await this.inventory.reserve(
       tx,
-      order.items.map(item => ({ productId: item.productId, size: item.size, qty: item.qty })),
+      order.id,
+      order.items.map(item => ({
+        productId: item.productId,
+        size: item.size,
+        qty: item.qty,
+        toppingIds: item.toppings.map(t => t.toppingId),
+      })),
     );
     await tx.orderEvent.create({
       data: { orderId: order.id, actorUserId: order.userId, fromStatus: 'PAYMENT_FAILED', toStatus: 'PENDING', orderVersion: order.version + 1 },

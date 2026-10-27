@@ -157,15 +157,28 @@ function setup(options: { resolveError?: Error; promo?: PromotionSnapshot; promo
     release: jest.fn(),
   };
   const inventory = {
+    check: jest.fn(async () => {
+      if (options.stockError) throw options.stockError;
+    }),
     reserve: jest.fn(async () => {
       if (options.stockError) throw options.stockError;
     }),
     release: jest.fn(),
   };
   const unitOfWork = { run: jest.fn(async (work: (t: Tx) => Promise<unknown>) => work(tx as unknown as Tx)) };
-  // Same contract as IdempotencyPort: run work inside the transaction callback.
+  // Same contract as IdempotencyPort: run work inside the transaction callback and roll back on failure.
   const idempotency = {
-    execute: jest.fn(async (_input: unknown, work: (t: Tx) => Promise<unknown>) => ({ data: await work(tx as unknown as Tx), replayed: false })),
+    execute: jest.fn(async (_input: unknown, work: (t: Tx) => Promise<unknown>) => {
+      const createdBefore = created.length;
+      const eventsBefore = events.length;
+      try {
+        return { data: await work(tx as unknown as Tx), replayed: false };
+      } catch (error) {
+        created.length = createdBefore;
+        events.length = eventsBefore;
+        throw error;
+      }
+    }),
   };
   const service = new OrdersService(
     unitOfWork as unknown as ServiceDeps[0],
@@ -249,21 +262,32 @@ describe('OrdersService.create (Issue #7)', () => {
 });
 
 describe('OrdersService.create holds stock (Issue #9)', () => {
-  it('reserves the merged cart lines in the same transaction, before the order is written', async () => {
+  it('writes the order first, then reserves the merged cart lines with order.id in the same transaction', async () => {
     const { service, inventory, tx } = setup();
     const order: string[] = [];
-    inventory.reserve.mockImplementation(async () => { order.push('reserve'); });
-    tx.order.create.mockImplementationOnce(async () => { order.push('order.create'); throw new Error('stop after order.create'); });
-    await expect(
-      service.create(USER, KEY, { items: [{ productId: PRODUCT, size: 'M', toppingIds: [TRAN_CHAU, KEM], qty: 1 }, { productId: PRODUCT, size: 'M', toppingIds: [KEM, TRAN_CHAU], qty: 1 }] }),
-    ).rejects.toThrow('stop after order.create');
-    expect(order).toEqual(['reserve', 'order.create']);
+    const baseCreate = tx.order.create.getMockImplementation()!;
+    tx.order.create.mockImplementationOnce(async arg => {
+      order.push('order.create');
+      return baseCreate(arg);
+    });
+    inventory.reserve.mockImplementation(async () => {
+      order.push('reserve');
+    });
+    await service.create(USER, KEY, {
+      items: [
+        { productId: PRODUCT, size: 'M', toppingIds: [TRAN_CHAU, KEM], qty: 1 },
+        { productId: PRODUCT, size: 'M', toppingIds: [KEM, TRAN_CHAU], qty: 1 },
+      ],
+    });
+    expect(order).toEqual(['order.create', 'reserve']);
     expect(inventory.reserve).toHaveBeenCalledTimes(1);
-    expect(inventory.reserve).toHaveBeenCalledWith(tx, [{ productId: PRODUCT, size: 'M', toppingIds: [KEM, TRAN_CHAU], qty: 2 }]);
+    expect(inventory.reserve).toHaveBeenCalledWith(tx, '44444444-4444-4444-8444-444444444444', [
+      { productId: PRODUCT, size: 'M', toppingIds: [KEM, TRAN_CHAU], qty: 2 },
+    ]);
   });
 
   it('stores nothing when stock is short (OUT_OF_STOCK)', async () => {
-    const { service, created, events } = setup({ stockError: new ApiError(409, 'OUT_OF_STOCK', 'Sản phẩm không đủ tồn kho') });
+    const { service, created, events } = setup({ stockError: new ApiError(409, 'OUT_OF_STOCK', 'Không đủ nguyên liệu cho món đã chọn') });
     await expectApiError(service.create(USER, KEY, REQUEST), 409, 'OUT_OF_STOCK');
     expect(created).toHaveLength(0);
     expect(events).toHaveLength(0);
@@ -275,18 +299,29 @@ describe('OrdersService.create holds stock (Issue #9)', () => {
     expect(created).toHaveLength(0);
   });
 
-  it('never holds stock for a price preview', async () => {
-    const { service, inventory } = setup();
+  it('checks stock read-only and never holds stock for a price preview', async () => {
+    const { service, inventory, tx } = setup();
     await service.quote(USER, REQUEST);
+    expect(inventory.check).toHaveBeenCalledTimes(1);
+    expect(inventory.check).toHaveBeenCalledWith(tx, [{ productId: PRODUCT, size: 'M', toppingIds: [KEM], qty: 2 }]);
     expect(inventory.reserve).not.toHaveBeenCalled();
   });
 });
 
 describe('OrdersService.quote (Issue #7)', () => {
-  it('returns the server price and writes nothing', async () => {
-    const { service, tx, promotions } = setup({ promo: { promotionId: 'p1', promotionCode: 'SAVE10', discount: 12000 } });
+  it('returns the server price, calls inventory.check, and writes nothing', async () => {
+    const { service, tx, promotions, inventory } = setup({ promo: { promotionId: 'p1', promotionCode: 'SAVE10', discount: 12000 } });
     const quote = await service.quote(USER, REQUEST);
     expect(quote).toMatchObject({ subtotal: 120000, discount: 12000, total: 108000 });
+    expect(inventory.check).toHaveBeenCalledWith(tx, [{ productId: PRODUCT, size: 'M', toppingIds: [KEM], qty: 2 }]);
+    expect(tx.order.create).not.toHaveBeenCalled();
+    expect(promotions.reserve).not.toHaveBeenCalled();
+    expect(inventory.reserve).not.toHaveBeenCalled();
+  });
+
+  it('rejects quote with 409 OUT_OF_STOCK when inventory.check fails and writes nothing', async () => {
+    const { service, tx, promotions } = setup({ stockError: new ApiError(409, 'OUT_OF_STOCK', 'Không đủ nguyên liệu cho món đã chọn') });
+    await expectApiError(service.quote(USER, REQUEST), 409, 'OUT_OF_STOCK');
     expect(tx.order.create).not.toHaveBeenCalled();
     expect(promotions.reserve).not.toHaveBeenCalled();
   });

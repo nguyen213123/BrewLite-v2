@@ -21,7 +21,6 @@ integration('Product catalog on PostgreSQL (Issue #2)', () => {
     const base = {
       description: 'test',
       imageUrl: 'http://localhost/x.svg',
-      stock: 5,
     };
 
     await prisma.product.create({

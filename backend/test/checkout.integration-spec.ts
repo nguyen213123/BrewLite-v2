@@ -45,14 +45,50 @@ integration('Real checkout: auth/catalog/create/inventory/promotion/payment/loya
   }
   async function fixture(stock = 20, maxUses = 100) {
     const id = randomUUID(), toppingId = randomUUID(), code = `T${randomUUID().slice(0, 8).toUpperCase()}`;
-    await prisma.topping.create({ data: { id: toppingId, name: 'Kem', price: 10000 } });
-    await prisma.product.create({ data: { id, name: 'Cappuccino', description: 'Checkout fixture', price: 45000,
-      imageUrl: 'http://localhost:3000/images/cappuccino.jpg', stock,
-      sizes: { create: [{ size: 'S', price: 45000 }, { size: 'M', price: 50000 }, { size: 'L', price: 55000 }] },
-      toppings: { create: [{ toppingId }] } } });
-    const promo = await prisma.promotion.create({ data: { code, type: 'PERCENT', value: 10, minSubtotal: 100000,
-      maxDiscount: 30000, maxUses, startsAt: new Date(Date.now() - 60_000), endsAt: new Date(Date.now() + 3600_000) } });
-    return { id, promo, body: { items: [{ productId: id, size: 'M', toppingIds: [toppingId], qty: 2 }], promotionCode: code } };
+    const ingredient = await prisma.ingredient.create({
+      data: { name: 'Checkout coffee', unit: 'PIECE', stock, packageSize: 10, packageLabel: 'túi' },
+    });
+    const toppingIng = await prisma.ingredient.create({
+      data: { name: 'Checkout cream', unit: 'PIECE', stock: 1000, packageSize: 10, packageLabel: 'hộp' },
+    });
+    await prisma.topping.create({
+      data: {
+        id: toppingId,
+        name: 'Kem',
+        price: 10000,
+        ingredients: { create: [{ ingredientId: toppingIng.id, amount: 1 }] },
+      },
+    });
+    await prisma.product.create({
+      data: {
+        id,
+        name: 'Cappuccino',
+        description: 'Checkout fixture',
+        price: 45000,
+        imageUrl: 'http://localhost:3000/images/cappuccino.jpg',
+        sizes: { create: [{ size: 'S', price: 45000 }, { size: 'M', price: 50000 }, { size: 'L', price: 55000 }] },
+        toppings: { create: [{ toppingId }] },
+        ingredients: { create: [{ ingredientId: ingredient.id, amount: 1 }] },
+      },
+    });
+    const promo = await prisma.promotion.create({
+      data: {
+        code,
+        type: 'PERCENT',
+        value: 10,
+        minSubtotal: 100000,
+        maxDiscount: 30000,
+        maxUses,
+        startsAt: new Date(Date.now() - 60_000),
+        endsAt: new Date(Date.now() + 3600_000),
+      },
+    });
+    return {
+      id,
+      promo,
+      ingredient,
+      body: { items: [{ productId: id, size: 'M', toppingIds: [toppingId], qty: 2 }], promotionCode: code },
+    };
   }
   it('seed runs twice without duplicates, and seeded catalog has sizes and toppings', async () => {
     const build = spawnSync(process.execPath, [require.resolve('typescript/bin/tsc'), '-p', 'tsconfig.seed.json'], { cwd: backend, encoding: 'utf8' });
@@ -73,12 +109,12 @@ integration('Real checkout: auth/catalog/create/inventory/promotion/payment/loya
     const f = await fixture();
     const quote = await post('/orders/quote', f.body).expect(200);
     expect(quote.body).toMatchObject({ subtotal: 120000, discount: 12000, total: 108000 });
-    expect((await prisma.product.findUniqueOrThrow({ where: { id: f.id } })).stock).toBe(20);
+    expect((await prisma.ingredient.findUniqueOrThrow({ where: { id: f.ingredient.id } })).stock).toBe(20);
     const key = randomUUID();
     const created = await post('/orders', f.body, key).expect(201);
     const replay = await post('/orders', f.body, key).expect(201);
     expect(replay.body.id).toBe(created.body.id); expect(replay.headers['idempotency-replayed']).toBe('true');
-    expect((await prisma.product.findUniqueOrThrow({ where: { id: f.id } })).stock).toBe(18);
+    expect((await prisma.ingredient.findUniqueOrThrow({ where: { id: f.ingredient.id } })).stock).toBe(18);
     const paymentKey = randomUUID(), payBody = { orderId: created.body.id, method: 'CARD', mockOutcome: 'SUCCESS' };
     const paid = await post('/payments', payBody, paymentKey).expect(200);
     expect(paid.body).toMatchObject({ order: { status: 'PAID', total: 108000 }, loyaltyPointsEarned: 0 });
@@ -88,7 +124,7 @@ integration('Real checkout: auth/catalog/create/inventory/promotion/payment/loya
     await post('/payments', payBody).expect(409);
     const cancelled = await post(`/orders/${created.body.id}/cancel`, { expectedVersion: paid.body.order.version }).expect(200);
     await post(`/orders/${created.body.id}/cancel`, { expectedVersion: cancelled.body.version }).expect(200);
-    expect((await prisma.product.findUniqueOrThrow({ where: { id: f.id } })).stock).toBe(20);
+    expect((await prisma.ingredient.findUniqueOrThrow({ where: { id: f.ingredient.id } })).stock).toBe(20);
     expect((await prisma.promotion.findUniqueOrThrow({ where: { id: f.promo.id } })).usedCount).toBe(0);
     expect((await prisma.user.findUniqueOrThrow({ where: { id: userId } })).loyaltyPoints).toBe(0);
     expect(await prisma.loyaltyEntry.count({ where: { orderId: created.body.id, kind: 'REVERSE' } })).toBe(0);
@@ -98,13 +134,13 @@ integration('Real checkout: auth/catalog/create/inventory/promotion/payment/loya
     const f = await fixture(); const created = await post('/orders', f.body).expect(201);
     const failedKey = randomUUID(), body = { orderId: created.body.id, method: 'WALLET', mockOutcome: 'FAIL' };
     await post('/payments', body, failedKey).expect(200); await post('/payments', body, failedKey).expect(200);
-    expect((await prisma.product.findUniqueOrThrow({ where: { id: f.id } })).stock).toBe(20);
+    expect((await prisma.ingredient.findUniqueOrThrow({ where: { id: f.ingredient.id } })).stock).toBe(20);
     expect((await prisma.promotion.findUniqueOrThrow({ where: { id: f.promo.id } })).usedCount).toBe(0);
     await prisma.productSize.updateMany({ where: { productId: f.id }, data: { price: 99999 } });
     const paid = await post('/payments', { ...body, mockOutcome: 'SUCCESS' }).expect(200);
     expect(paid.body.order).toMatchObject({ id: created.body.id, total: 108000, status: 'PAID' });
     expect(await prisma.order.count({ where: { items: { some: { productId: f.id } } } })).toBe(1);
-    expect((await prisma.product.findUniqueOrThrow({ where: { id: f.id } })).stock).toBe(18);
+    expect((await prisma.ingredient.findUniqueOrThrow({ where: { id: f.ingredient.id } })).stock).toBe(18);
   });
   it('out of stock rolls back promotion, idempotency and all order writes', async () => {
     const f = await fixture(1), key = randomUUID();
@@ -129,7 +165,7 @@ integration('Real checkout: auth/catalog/create/inventory/promotion/payment/loya
     const responses = await Promise.all(Array.from({ length: 10 }, () => post('/orders', body)));
     expect(responses.filter(r => r.status === 201)).toHaveLength(1);
     expect(responses.filter(r => r.status === 409)).toHaveLength(9);
-    expect((await prisma.product.findUniqueOrThrow({ where: { id: f.id } })).stock).toBe(0);
+    expect((await prisma.ingredient.findUniqueOrThrow({ where: { id: f.ingredient.id } })).stock).toBe(0);
   }, 30_000);
 
   // No provider overrides: JWT, catalog, idempotency, inventory, promotions,
@@ -164,7 +200,7 @@ integration('Real checkout: auth/catalog/create/inventory/promotion/payment/loya
     expect(await prisma.order.count({ where: { items: { some: { productId: f.id } } } })).toBe(1);
     expect(await prisma.orderItem.count({ where: { orderId: created.id } })).toBe(1);
     expect(await prisma.orderEvent.count({ where: { orderId: created.id } })).toBe(1);
-    expect(await prisma.product.findUniqueOrThrow({ where: { id: f.id } })).toMatchObject({ stock: 0, version: 1 });
+    expect(await prisma.ingredient.findUniqueOrThrow({ where: { id: f.ingredient.id } })).toMatchObject({ stock: 0, version: 1 });
     expect(await prisma.promotion.findUniqueOrThrow({ where: { id: f.promo.id } })).toMatchObject({ usedCount: 1, version: 1 });
     const records = await prisma.idempotencyRecord.findMany({ where: { userId, scope: 'CREATE_ORDER', key } });
     expect(records).toHaveLength(1);
@@ -187,7 +223,7 @@ integration('Real checkout: auth/catalog/create/inventory/promotion/payment/loya
     const entries = await prisma.loyaltyEntry.findMany({ where: { orderId: created.body.id } });
     expect(entries).toHaveLength(0);
     expect((await prisma.user.findUniqueOrThrow({ where: { id: userId } })).loyaltyPoints).toBe(before.loyaltyPoints);
-    expect(await prisma.product.findUniqueOrThrow({ where: { id: f.id } })).toMatchObject({ stock: 18, version: 1 });
+    expect(await prisma.ingredient.findUniqueOrThrow({ where: { id: f.ingredient.id } })).toMatchObject({ stock: 18, version: 1 });
     expect(await prisma.promotion.findUniqueOrThrow({ where: { id: f.promo.id } })).toMatchObject({ usedCount: 1, version: 1 });
     const records = await prisma.idempotencyRecord.findMany({ where: { userId, scope: 'PAY_ORDER', key } });
     expect(records).toHaveLength(1);
@@ -211,7 +247,7 @@ integration('Real checkout: auth/catalog/create/inventory/promotion/payment/loya
     const failed = await concurrentReplays('/payments', body, key, 200);
     expect(failed).toMatchObject({ payment: { status: 'FAILED' }, order: { status: 'PAYMENT_FAILED', reservationStatus: 'RELEASED' }, loyaltyPointsEarned: 0 });
     expect(await prisma.payment.count({ where: { orderId: created.body.id } })).toBe(1);
-    expect(await prisma.product.findUniqueOrThrow({ where: { id: f.id } })).toMatchObject({ stock: 20, version: 2 });
+    expect(await prisma.ingredient.findUniqueOrThrow({ where: { id: f.ingredient.id } })).toMatchObject({ stock: 20, version: 2 });
     expect(await prisma.promotion.findUniqueOrThrow({ where: { id: f.promo.id } })).toMatchObject({ usedCount: 0, version: 2 });
     expect(await prisma.loyaltyEntry.count({ where: { orderId: created.body.id } })).toBe(0);
     expect((await prisma.user.findUniqueOrThrow({ where: { id: userId } })).loyaltyPoints).toBe(before.loyaltyPoints);
@@ -225,7 +261,7 @@ integration('Real checkout: auth/catalog/create/inventory/promotion/payment/loya
     expect(await prisma.payment.count({ where: { orderId: created.body.id } })).toBe(2);
     expect(await prisma.payment.count({ where: { orderId: created.body.id, status: 'SUCCEEDED' } })).toBe(1);
     expect(await prisma.orderEvent.count({ where: { orderId: created.body.id } })).toBe(4);
-    expect(await prisma.product.findUniqueOrThrow({ where: { id: f.id } })).toMatchObject({ stock: 18, version: 3 });
+    expect(await prisma.ingredient.findUniqueOrThrow({ where: { id: f.ingredient.id } })).toMatchObject({ stock: 18, version: 3 });
     expect(await prisma.promotion.findUniqueOrThrow({ where: { id: f.promo.id } })).toMatchObject({ usedCount: 1, version: 3 });
     expect(await prisma.loyaltyEntry.count({ where: { orderId: created.body.id, kind: 'EARN' } })).toBe(0);
     expect((await prisma.user.findUniqueOrThrow({ where: { id: userId } })).loyaltyPoints).toBe(before.loyaltyPoints);

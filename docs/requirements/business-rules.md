@@ -9,7 +9,7 @@ Ngày chốt kỹ thuật: 22/10/2026. Phục vụ issue #1, Task 2–10 của �
 - OpenAPI: `docs/api/openapi.yaml` quyết định hình dạng JSON, đường dẫn, HTTP status. `docs/api/examples.json` là fixture kiểm chứng cùng contract.
 - ERD và schema tham chiếu: `docs/diagrams/erd.md`, `docs/diagrams/schema.prisma`. Khung API đã có schema runtime và migration nền theo 13 bảng này; TV3 phối hợp các chủ bảng review trước khi trưởng nhóm merge. Không tạo lại migration nền ở từng feature branch.
 - Tài liệu này quyết định công thức, trạng thái, transaction và hành vi retry. Khi đổi contract, phải cập nhật cả OpenAPI, ví dụ, tài liệu và các module liên quan trong cùng PR.
-- Không yêu cầu trong MVP: quản trị catalog, UI barista, cổng thanh toán thật, refresh token, sử dụng/đổi điểm lấy tiền, tồn kho từng nguyên liệu, tự động hết hạn đơn.
+- Không yêu cầu trong MVP: quản trị catalog, UI barista, cổng thanh toán thật, refresh token, sử dụng/đổi điểm lấy tiền, tự động hết hạn đơn. (Lưu ý: Tồn kho theo nguyên liệu và công thức món đã được hỗ trợ đầy đủ).
 
 ## 2. Sản phẩm, cart và giá
 
@@ -53,17 +53,38 @@ Theo đúng sơ đồ đề: mọi cạnh không có trong bảng đều bị `a
 - COMPLETED và CANCELLED là trạng thái cuối. Không cho CANCELLED/COMPLETED quay lại PENDING. Không cho hủy PREPARING hoặc READY vì không có cạnh này trong đề.
 - Retry payment sau PAYMENT_FAILED là hai chuyển tiếp hợp lệ trong cùng transaction: FAILED → PENDING → PAID hoặc FAILED. Nếu không giữ lại được kho/ưu đãi thì rollback, giữ PAYMENT_FAILED và không tạo attempt mới.
 - Đơn PENDING giữ tài nguyên cho đến khi payment/cancel; chưa có job timeout trong MVP. UI cung cấp hủy và thử lại; dữ liệu demo được reset bằng seed có chủ đích.
-- Order.version tăng sau mỗi chuyển trạng thái; thao tác trên version cũ trả `409 ORDER_VERSION_CONFLICT`. Cập nhật phải có điều kiện status/version và có OrderEvent cùng transaction. Dùng thứ tự tăng dần productId khi truy cập nhiều stock để giảm deadlock.
+- Order.version tăng sau mỗi chuyển trạng thái; thao tác trên version cũ trả `409 ORDER_VERSION_CONFLICT`. Cập nhật phải có điều kiện status/version và có OrderEvent cùng transaction. Dùng thứ tự tăng dần ingredientId khi truy cập nhiều nguyên liệu để loại trừ deadlock.
 - Cancel đã CANCELLED với cùng expectedVersion hiện tại trả 200 không phát sinh hiệu ứng mới; expectedVersion cũ trả 409. Gọi payment trên PAID/PREPARING/READY/COMPLETED/CANCELLED với key mới trả 409; replay key cũ trả snapshot kết quả cũ.
 
-## 5. Tồn kho: product stock + optimistic locking
+## 5. Tồn kho nguyên liệu, công thức món & optimistic locking
 
-- Product.stock là số ly còn có thể bán, dùng chung cho các size và topping. Mỗi qty tiêu thụ một ly; cộng qty theo productId của mọi dòng trước khi giữ kho. Không có kho topping/nguyên liệu riêng trong MVP.
-- Product.version phục vụ optimistic locking. Trong một DB transaction: đọc stock/version, kiểm tra đủ kho; `updateMany where id, version, stock >= required`, `stock -= required`, `version += 1`; count khác 1 thì rollback toàn bộ.
-- Retry toàn bộ transaction tối đa 3 lần cho xung đột version/deadlock/serialization, đọc lại dữ liệu mỗi lần. Hết lượt retry trả `409 STOCK_CONFLICT`; thiếu hàng thực sự trả `409 OUT_OF_STOCK`.
-- Tạo đơn cùng lúc giữ kho và promo; không giữ từng dòng ngoài transaction. Bất kỳ lỗi nào không để lại đơn dở dang hoặc mất kho/lượt ưu đãi.
-- Order.reservationStatus: HELD lúc PENDING; CONSUMED lúc PAID và pha chế/hoàn thành; RELEASED lúc thất bại/hủy. Khi retry, RELEASED → HELD rồi CONSUMED/RELEASED trong cùng transaction. Trả kho chỉ được khi trước đó HELD/CONSUMED và trạng thái đơn cho phép; chuyển RELEASED có điều kiện để chống trả lặp.
-- Test bắt buộc trên PostgreSQL: stock=1, ít nhất 10 request tạo đơn cạnh tranh với key khác nhau, đúng 1 đơn giữ được hàng; stock không âm. Nhiều dòng cùng productId cũng không vượt tồn.
+- Quản lý tồn kho ở mức nguyên liệu (`Ingredient`): kho lưu trữ theo đơn vị đo lường gốc (`GRAM`, `ML`, `PIECE`). Mỗi nguyên liệu có `packageSize` và `packageLabel` (ví dụ 250 g/"túi", 1000 ml/"hộp"). Cột `Product.stock` đã được loại bỏ khỏi cơ sở dữ liệu; trường `stock` trả về qua API là giá trị tính toán động dựa trên lượng nguyên liệu hiện có.
+- Công thức món (`ProductIngredient`) và công thức topping (`ToppingIngredient`):
+  - Mỗi sản phẩm có công thức định lượng chuẩn cho size S (`amount > 0`).
+  - Hệ số quy đổi kích cỡ: S = 100%, M = 125%, L = 150%. Định lượng theo size tính bằng công thức:
+    `perCupAmount(amount, unit, size) = unit === 'PIECE' ? amount : Math.ceil(amount * SIZE_FACTOR_PCT[size] / 100)`.
+    Đơn vị `PIECE` (ví dụ chanh tươi) không nhân hệ số size (1 quả chanh luôn là 1 quả ở mọi size).
+  - Topping có công thức riêng định lượng cho 1 phần phục vụ (`amount > 0`) và không nhân hệ số size.
+  - Món hoặc topping chưa có công thức được coi là hết hàng (`stock = 0`), không bao giờ được phép bán vô hạn.
+- Cách tính số lượng khả dụng:
+  - **Số ly còn bán được của một size:** min trên mọi nguyên liệu trong công thức của $\lfloor stock / perCupAmount \rfloor$. Nếu công thức rỗng, trả về 0.
+  - **Số phần topping còn lại:** min trên mọi nguyên liệu trong công thức topping của $\lfloor stock / amount \rfloor$. Nếu công thức rỗng, trả về 0.
+  - `ProductSummary.stock` là số ly còn bán được của size S (luôn là giá trị lớn nhất trong ba size).
+- Quy tắc kiểm tra và giữ kho:
+  - Báo giá (`POST /orders/quote`): `check(tx, items)` chỉ đọc để kiểm tra đủ nguyên liệu cho các món và topping đã chọn; thiếu nguyên liệu trả `409 OUT_OF_STOCK` với thông điệp `"Không đủ nguyên liệu cho món đã chọn"`. Không trừ kho và không tạo snapshot hold.
+  - Định lượng cho đơn hàng: với mỗi dòng trong giỏ, cộng `perCupAmount * qty` cho từng nguyên liệu của món, cộng thêm `amount * qty` cho từng nguyên liệu của mỗi topping đã chọn. Sau đó **gộp nhu cầu theo `ingredientId`** (nếu món và topping cùng dùng chung một nguyên liệu, ví dụ Trà sữa trân châu và topping Trân châu, thì được gộp chính xác trước khi giữ kho) và **sắp xếp theo `ingredientId` tăng dần** để loại trừ hoàn toàn nguy cơ deadlock khi nhiều đơn hàng giữ kho đồng thời.
+- Optimistic locking và retry:
+  - Giữ kho thực hiện trên từng bản ghi `Ingredient` theo thứ tự `ingredientId` tăng dần: đọc `stock`, `version`; kiểm tra `stock >= required`; câu lệnh cập nhật nguyên tử có điều kiện: `UPDATE Ingredient SET stock = stock - required, version = version + 1 WHERE id = ? AND version = ? AND stock >= required`.
+  - Tối đa 3 lần thử (`MAX_STOCK_ATTEMPTS = 3`) cho mỗi nguyên liệu khi gặp xung đột phiên bản (`version`). Nếu sau 3 lần vẫn không thành công, trả `409 STOCK_CONFLICT` ("Tồn kho đang thay đổi, vui lòng thử lại"). Thiếu nguyên liệu thực sự luôn trả `409 OUT_OF_STOCK` ("Không đủ nguyên liệu cho món đã chọn").
+  - Toàn bộ thao tác chạy trong database transaction của người gọi (`UnitOfWork`). Bất kỳ lỗi nào (hết hàng, xung đột kho, lỗi thanh toán) đều làm rollback toàn bộ, không để lại đơn hàng dở dang hay thất thoát tồn kho.
+- Snapshot giữ kho (`OrderIngredientHold`) & hoàn kho (`release`):
+  - Khi tạo đơn (`reserve` thành công), hệ thống ghi lại chính xác số lượng nguyên liệu đã trừ cho đơn vào bảng `OrderIngredientHold (orderId, ingredientId, amount)`. Trạng thái giữ kho của đơn là `HELD`.
+  - `Order.reservationStatus`: `HELD` lúc `PENDING`; chuyển sang `CONSUMED` khi `PAID` và trong suốt quá trình pha chế/hoàn thành; chuyển sang `RELEASED` khi thanh toán thất bại (`PAYMENT_FAILED`) hoặc đơn bị hủy (`CANCELLED`).
+  - Hoàn kho (`release`): trước hết chuyển trạng thái `reservationStatus` từ `HELD`/`CONSUMED` sang `RELEASED` bằng câu lệnh cập nhật có điều kiện (`UPDATE Order SET reservationStatus = 'RELEASED' WHERE id = ? AND reservationStatus IN ('HELD', 'CONSUMED')`). Nếu thành công (`count = 1`), hệ thống nạp snapshot từ `OrderIngredientHold` và hoàn trả **đúng số lượng nguyên liệu đã giữ ban đầu**, tăng `Ingredient.version`. Cơ chế này đảm bảo:
+    1. Hoàn kho đúng một lần, chống trả lặp khi có nhiều request đồng thời hoặc retry.
+    2. Nếu công thức nguyên liệu của món/topping bị thay đổi sau khi tạo đơn (ví dụ do cập nhật công thức hoặc seed lại), việc hoàn kho vẫn trả đúng lượng nguyên liệu thực tế đã trừ từ snapshot hold.
+  - Thử lại thanh toán (`prepareRetry` khi từ `PAYMENT_FAILED` sang `PENDING`): xóa các dòng hold cũ của đơn trong `OrderIngredientHold`, trừ kho lại theo công thức hiện tại của các món và topping đã chọn, và ghi nhận snapshot hold mới.
+- Kiểm thử bắt buộc trên PostgreSQL thật: nguyên liệu đủ cho đúng 1 ly, 10 request tạo đơn đồng thời bằng idempotency key khác nhau, duy nhất 1 đơn thành công; kho nguyên liệu về 0 và không bao giờ âm. Đơn có nhiều dòng hoặc món và topping dùng chung nguyên liệu cũng không bao giờ vượt tồn.
 
 ## 6. Khuyến mãi và điểm thưởng
 
@@ -113,7 +134,7 @@ Theo đúng sơ đồ đề: mọi cạnh không có trong bảng đều bị `a
 | PAID → COMPLETED trực tiếp | 409 INVALID_ORDER_TRANSITION |
 | PAID → CANCELLED tranh với PREPARING | Một transition thắng; refund/reverse chỉ khi cancel thắng |
 | CANCELLED/COMPLETED → trạng thái khác | 409, không thay đổi dữ liệu |
-| Product.stock=1, 10 create đồng thời | Tối đa 1 đơn thành công; kho không âm |
+| Nguyên liệu đủ 1 ly, 10 create đồng thời | Tối đa 1 đơn thành công; kho không âm |
 | Mã maxUses=1, 10 create đồng thời | Tối đa 1 lượt giữ; không vượt usedCount |
 
 Đo mục tiêu API <500ms với dữ liệu mẫu trong điều kiện bình thường; ghi rõ endpoint, percentile, dataset, concurrency và máy đo. Lock timeout cho test tranh chấp không phải cam kết dưới 500ms. Task hoàn tất khi có code chạy, PR/commit được review, validation, trạng thái UI và README theo DoD của đề.

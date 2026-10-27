@@ -33,7 +33,11 @@ export class OrdersService implements OrdersPort {
   // Preview only: no order, no stock hold and no promotion counter change (business-rules §2.7).
   async quote(_userId: string, input: Api.OrderRequest): Promise<Api.Quote> {
     const items = normalizeCartItems(input.items);
-    return this.unitOfWork.run(async tx => (await this.priceCart(tx, items, input.promotionCode)).quote);
+    return this.unitOfWork.run(async tx => {
+      const { quote } = await this.priceCart(tx, items, input.promotionCode);
+      await this.inventory.check(tx, items);
+      return quote;
+    });
   }
 
   // userId always comes from the JWT; prices always come from the catalog, never from the client.
@@ -50,7 +54,6 @@ export class OrdersService implements OrdersPort {
       async tx => {
         const { quote, promo } = await this.priceCart(tx, items, input.promotionCode);
         if (promo.promotionId) await this.promotions.reserve(tx, promo.promotionId);
-        await this.inventory.reserve(tx, items);
         const order = await tx.order.create({
           data: {
             code: generateOrderCode(),
@@ -80,6 +83,7 @@ export class OrdersService implements OrdersPort {
           },
           include: { items: { include: { toppings: true } } },
         });
+        await this.inventory.reserve(tx, order.id, items);
         await tx.orderEvent.create({
           data: { orderId: order.id, actorUserId: userId, fromStatus: null, toStatus: 'PENDING', orderVersion: order.version },
         });

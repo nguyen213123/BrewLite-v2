@@ -75,6 +75,7 @@ function fakeDb(overrides: Partial<Row> = {}) {
   };
 
   const inventory = {
+    check: jest.fn(async () => undefined),
     reserve: jest.fn(async () => undefined),
     release: jest.fn(async () => { row.reservationStatus = 'RELEASED'; }),
   };
@@ -204,10 +205,40 @@ describe('OrderTransactionsService.prepareRetry (PAYMENT_FAILED -> PENDING)', ()
     const db = fakeDb({ status: 'PAYMENT_FAILED', version: 2 });
     const result = await db.transitions.prepareRetry(db.tx, db.snapshot() as unknown as StoredOrder);
     expect(result).toMatchObject({ status: 'PENDING', reservationStatus: 'HELD', version: 3, subtotal: 120000, discount: 12000, total: 108000 });
-    expect(db.inventory.reserve).toHaveBeenCalledWith(db.tx, [{ productId: PRODUCT, size: 'M', qty: 2 }]);
+    expect(db.inventory.reserve).toHaveBeenCalledWith(db.tx, ORDER, [{ productId: PRODUCT, size: 'M', qty: 2, toppingIds: [] }]);
     expect(db.promotions.price).toHaveBeenCalledWith(db.tx, 'SAVE10', 120000);
     expect(db.promotions.reserve).toHaveBeenCalledWith(db.tx, 'p1');
     expect(db.events).toEqual([{ orderId: ORDER, actorUserId: OWNER, fromStatus: 'PAYMENT_FAILED', toStatus: 'PENDING', orderVersion: 3 }]);
+  });
+
+  it('(Review 1) prepareRetry forwards toppingIds from item.toppings to inventory.reserve', async () => {
+    const KEM = '22222222-2222-4222-8222-222222222201';
+    const PEARL = '22222222-2222-4222-8222-222222222202';
+    const db = fakeDb({
+      status: 'PAYMENT_FAILED',
+      version: 2,
+      items: [
+        {
+          id: 'i1',
+          orderId: ORDER,
+          productId: PRODUCT,
+          productName: 'Cappuccino',
+          size: 'L',
+          sizePrice: 55000,
+          unitPrice: 75000,
+          qty: 2,
+          lineTotal: 150000,
+          toppings: [
+            { orderItemId: 'i1', toppingId: KEM, name: 'Kem', price: 10000 },
+            { orderItemId: 'i1', toppingId: PEARL, name: 'Trân châu', price: 10000 },
+          ],
+        },
+      ],
+    });
+    await db.transitions.prepareRetry(db.tx, db.snapshot() as unknown as StoredOrder);
+    expect(db.inventory.reserve).toHaveBeenCalledWith(db.tx, ORDER, [
+      { productId: PRODUCT, size: 'L', qty: 2, toppingIds: [KEM, PEARL] },
+    ]);
   });
 
   it('propagates OUT_OF_STOCK so the caller rolls back; no event is written', async () => {

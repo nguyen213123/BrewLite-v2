@@ -12,22 +12,26 @@
       "sizes": [
         {
           "size": "S",
-          "price": 45000
+          "price": 45000,
+          "stock": 20
         },
         {
           "size": "M",
-          "price": 50000
+          "price": 50000,
+          "stock": 16
         },
         {
           "size": "L",
-          "price": 55000
+          "price": 55000,
+          "stock": 13
         }
       ],
       "toppings": [
         {
           "id": "22222222-2222-4222-8222-222222222222",
           "name": "Kem",
-          "price": 10000
+          "price": 10000,
+          "stock": 33
         }
       ]
     },
@@ -153,22 +157,26 @@
           "sizes": [
             {
               "size": "S",
-              "price": 45000
+              "price": 45000,
+              "stock": 20
             },
             {
               "size": "M",
-              "price": 50000
+              "price": 50000,
+              "stock": 16
             },
             {
               "size": "L",
-              "price": 55000
+              "price": 55000,
+              "stock": 13
             }
           ],
           "toppings": [
             {
               "id": "22222222-2222-4222-8222-222222222222",
               "name": "Kem",
-              "price": 10000
+              "price": 10000,
+              "stock": 33
             }
           ]
         }

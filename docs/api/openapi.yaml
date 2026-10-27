@@ -163,14 +163,18 @@ paths:
                     sizes:
                       - size: S
                         price: 45000
+                        stock: 20
                       - size: M
                         price: 50000
+                        stock: 16
                       - size: L
                         price: 55000
+                        stock: 13
                     toppings:
                       - id: 22222222-2222-4222-8222-222222222222
                         name: Kem
                         price: 10000
+                        stock: 33
         '400':
           description: Dữ liệu/header không hợp lệ
           content:
@@ -1702,6 +1706,7 @@ components:
         stock:
           type: integer
           minimum: 0
+          description: Số ly size S còn pha được
     Topping:
       type: object
       additionalProperties: false
@@ -1720,6 +1725,28 @@ components:
           type: integer
           minimum: 0
           maximum: 2000000000
+    ToppingOption:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - name
+        - price
+        - stock
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          maxLength: 120
+        price:
+          type: integer
+          minimum: 0
+          maximum: 2000000000
+        stock:
+          type: integer
+          minimum: 0
     ProductDetail:
       type: object
       additionalProperties: false
@@ -1761,6 +1788,7 @@ components:
             required:
               - size
               - price
+              - stock
             properties:
               size:
                 $ref: '#/components/schemas/Size'
@@ -1768,12 +1796,15 @@ components:
                 type: integer
                 minimum: 0
                 maximum: 2000000000
+              stock:
+                type: integer
+                minimum: 0
           minItems: 3
           maxItems: 3
         toppings:
           type: array
           items:
-            $ref: '#/components/schemas/Topping'
+            $ref: '#/components/schemas/ToppingOption'
     ProductPage:
       type: object
       additionalProperties: false

@@ -1,62 +1,122 @@
-// Owner: TV3 — #9. Product.stock is a shared pool of cups per product (size/topping do not have their own stock).
+// Owner: TV3 — #9. Giữ kho, kiểm tra kho và hoàn kho theo nguyên liệu + công thức (spec A3, A4).
 import { Injectable } from '@nestjs/common';
 import { InventoryPort } from '../../common/contracts/ports';
 import type { StoredOrder, Tx } from '../../common/contracts/ports';
 import type * as Api from '../../common/contracts/api.generated';
 import { ApiError } from '../../common/errors/api-error';
+import { requiredIngredients } from './domain/recipe';
+import { loadRecipeBook } from './recipe.repository';
 
 export const MAX_STOCK_ATTEMPTS = 3;
 
-// business-rules §5: add up qty per productId over every line BEFORE touching stock, and visit
-// products in ascending id order so concurrent orders take row locks in the same order (no deadlock).
-export function requiredByProduct(lines: Array<{ productId: string; qty: number }>): Array<[string, number]> {
-  const totals = new Map<string, number>();
-  for (const line of lines) totals.set(line.productId, (totals.get(line.productId) ?? 0) + line.qty);
-  return [...totals.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-}
-
 @Injectable()
 export class InventoryService implements InventoryPort {
-  // Holds stock for a new PENDING order. Must run inside the caller's transaction (create order / payment retry):
-  // any thrown error rolls back every product already decremented by this call, so a rejected order holds nothing.
-  async reserve(tx: Tx, items: Api.CartItem[]): Promise<void> {
-    for (const [productId, qty] of requiredByProduct(items)) {
-      await this.holdProduct(tx, productId, qty);
+  // Chỉ đọc để kiểm tra tồn kho nguyên liệu cho báo giá (quote). Không trừ kho và không ghi hold.
+  async check(tx: Tx, items: Api.CartItem[]): Promise<void> {
+    const required = await this.prepareRequired(tx, items);
+    for (const [ingredientId, amount] of required) {
+      const ingredient = await tx.ingredient.findUnique({
+        where: { id: ingredientId },
+        select: { stock: true },
+      });
+      if (!ingredient || ingredient.stock < amount) {
+        throw new ApiError(409, 'OUT_OF_STOCK', 'Không đủ nguyên liệu cho món đã chọn');
+      }
     }
   }
 
-  // Gives stock back exactly once. The order's reservationStatus is flipped HELD/CONSUMED -> RELEASED with a
-  // conditional update first; if another request already released it, count is 0 and nothing is returned twice.
+  // Trừ tồn kho nguyên liệu theo thứ tự ingredientId tăng dần và lưu OrderIngredientHold cho đơn hàng.
+  // Chạy trong transaction của người gọi (tạo đơn / prepareRetry); bất kỳ lỗi nào cũng rollback toàn bộ.
+  async reserve(tx: Tx, orderId: string, items: Api.CartItem[]): Promise<void> {
+    const required = await this.prepareRequired(tx, items);
+    for (const [ingredientId, amount] of required) {
+      await this.holdIngredient(tx, ingredientId, amount);
+    }
+    await tx.orderIngredientHold.deleteMany({ where: { orderId } });
+    if (required.length > 0) {
+      await tx.orderIngredientHold.createMany({
+        data: required.map(([ingredientId, amount]) => ({ orderId, ingredientId, amount })),
+      });
+    }
+  }
+
+  // Hoàn kho đúng một lần dựa trên OrderIngredientHold đã ghi khi reserve.
+  // Chuyển reservationStatus sang RELEASED bằng câu cập nhật có điều kiện trước; nếu đã RELEASED thì bỏ qua.
   async release(tx: Tx, order: StoredOrder): Promise<void> {
     const flipped = await tx.order.updateMany({
       where: { id: order.id, reservationStatus: { in: ['HELD', 'CONSUMED'] } },
       data: { reservationStatus: 'RELEASED' },
     });
     if (flipped.count === 0) return;
-    for (const [productId, qty] of requiredByProduct(order.items)) {
-      const restored = await tx.product.updateMany({
-        where: { id: productId },
-        data: { stock: { increment: qty }, version: { increment: 1 } },
+
+    const holds = await tx.orderIngredientHold.findMany({
+      where: { orderId: order.id },
+      orderBy: { ingredientId: 'asc' },
+    });
+    const sortedHolds = [...holds].sort((a, b) =>
+      a.ingredientId < b.ingredientId ? -1 : a.ingredientId > b.ingredientId ? 1 : 0,
+    );
+
+    for (const hold of sortedHolds) {
+      const restored = await tx.ingredient.updateMany({
+        where: { id: hold.ingredientId },
+        data: { stock: { increment: hold.amount }, version: { increment: 1 } },
       });
-      // Products are never deleted (FK Restrict); a miss means corrupt data, so abort and roll back.
-      if (restored.count !== 1) throw new Error(`Cannot restore stock for product ${productId}`);
+      if (restored.count !== 1) {
+        throw new Error(`Cannot restore stock for ingredient ${hold.ingredientId}`);
+      }
     }
   }
 
-  // Optimistic locking on Product.version: read stock/version, then update only if the row is still unchanged
-  // and still has enough stock. Under READ COMMITTED a concurrent winner makes our UPDATE match 0 rows (no DB error,
-  // so the transaction stays usable) and we re-read and retry, at most MAX_STOCK_ATTEMPTS times.
-  private async holdProduct(tx: Tx, productId: string, qty: number): Promise<void> {
+  // Xác thực sản phẩm đang hoạt động, tải công thức, kiểm tra món/topping đều có công thức, rồi tính lượng nguyên liệu cần.
+  private async prepareRequired(
+    tx: Tx,
+    items: Api.CartItem[],
+  ): Promise<Array<[ingredientId: string, amount: number]>> {
+    const productIds = [...new Set(items.map(item => item.productId))].sort();
+    const toppingIds = [...new Set(items.flatMap(item => item.toppingIds ?? []))].sort();
+
+    if (tx.product) {
+      for (const productId of productIds) {
+        const product = await tx.product.findUnique({
+          where: { id: productId },
+          select: { active: true },
+        });
+        if (!product || !product.active) {
+          throw new ApiError(404, 'PRODUCT_NOT_FOUND', 'Sản phẩm không tồn tại');
+        }
+      }
+    }
+
+    const book = await loadRecipeBook(tx, productIds, toppingIds);
+
+    for (const productId of productIds) {
+      if ((book.products.get(productId) ?? []).length === 0) {
+        throw new ApiError(409, 'OUT_OF_STOCK', 'Không đủ nguyên liệu cho món đã chọn');
+      }
+    }
+    for (const toppingId of toppingIds) {
+      if ((book.toppings.get(toppingId) ?? []).length === 0) {
+        throw new ApiError(409, 'OUT_OF_STOCK', 'Không đủ nguyên liệu cho món đã chọn');
+      }
+    }
+
+    return requiredIngredients(book, items);
+  }
+
+  // Optimistic locking trên Ingredient.version: đọc stock/version rồi cập nhật có điều kiện, thử tối đa MAX_STOCK_ATTEMPTS lần.
+  private async holdIngredient(tx: Tx, ingredientId: string, amount: number): Promise<void> {
     for (let attempt = 1; attempt <= MAX_STOCK_ATTEMPTS; attempt++) {
-      const product = await tx.product.findUnique({
-        where: { id: productId },
-        select: { stock: true, version: true, active: true },
+      const ingredient = await tx.ingredient.findUnique({
+        where: { id: ingredientId },
+        select: { stock: true, version: true },
       });
-      if (!product || !product.active) throw new ApiError(404, 'PRODUCT_NOT_FOUND', 'Sản phẩm không tồn tại');
-      if (product.stock < qty) throw new ApiError(409, 'OUT_OF_STOCK', 'Sản phẩm không đủ tồn kho');
-      const updated = await tx.product.updateMany({
-        where: { id: productId, version: product.version, stock: { gte: qty } },
-        data: { stock: { decrement: qty }, version: { increment: 1 } },
+      if (!ingredient || ingredient.stock < amount) {
+        throw new ApiError(409, 'OUT_OF_STOCK', 'Không đủ nguyên liệu cho món đã chọn');
+      }
+      const updated = await tx.ingredient.updateMany({
+        where: { id: ingredientId, version: ingredient.version, stock: { gte: amount } },
+        data: { stock: { decrement: amount }, version: { increment: 1 } },
       });
       if (updated.count === 1) return;
     }

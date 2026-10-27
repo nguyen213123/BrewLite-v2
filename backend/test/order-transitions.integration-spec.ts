@@ -6,6 +6,7 @@ import { OrderTransactionsService } from '../src/modules/orders/order-transactio
 import { OrdersService } from '../src/modules/orders/orders.service';
 import { ApiError } from '../src/common/errors/api-error';
 import { createTempDatabase, type TempDatabase } from './support/temp-database';
+import { seedSingleIngredientProduct, stockOfProduct } from './support/recipe-fixtures';
 
 // Real PostgreSQL test for Issue #8 (competing transitions, duplicate cancel/retry, rollback). Opt-in like the others:
 //   $env:DATABASE_URL = "<value from backend/.env>"; $env:RUN_DB_TESTS = "1"
@@ -47,8 +48,12 @@ integration('Order state machine on PostgreSQL', () => {
 
   // `stock` is what is left AFTER this order's QTY cups were taken (a HELD/CONSUMED order already holds them).
   async function newOrder(options: { status: Status; reservation: Reservation; stock: number; version?: number }) {
-    const product = await prisma.product.create({
-      data: { name: `Order test ${randomUUID().slice(0, 8)}`, description: 'State machine fixture', price: 45000, imageUrl: 'http://localhost/test.jpg', stock: options.stock },
+    const { product, ingredient, perCup } = await seedSingleIngredientProduct(prisma, {
+      productName: 'State machine fixture',
+      stockCups: options.stock,
+      size: 'M',
+      cupAmount: 18,
+      unit: 'GRAM',
     });
     const user = await prisma.user.create({ data: { email: `${randomUUID()}@example.com`, passwordHash: 'test-only-not-an-auth-account' } });
     const order = await prisma.order.create({
@@ -58,9 +63,18 @@ integration('Order state machine on PostgreSQL', () => {
         items: { create: [{ productId: product.id, productName: 'Fixture', size: 'M', sizePrice: 45000, unitPrice: 45000, qty: QTY, lineTotal: 90000 }] },
       },
     });
-    return { product, user, order };
+    if (options.reservation === 'HELD' || options.reservation === 'CONSUMED') {
+      await prisma.orderIngredientHold.create({
+        data: {
+          orderId: order.id,
+          ingredientId: ingredient.id,
+          amount: QTY * perCup,
+        },
+      });
+    }
+    return { product, user, order, ingredient };
   }
-  const stockOf = async (id: string) => (await prisma.product.findUniqueOrThrow({ where: { id } })).stock;
+  const stockOf = async (id: string) => stockOfProduct(prisma, id, 'M');
   const reload = (id: string) => prisma.order.findUniqueOrThrow({ where: { id } });
   const eventCount = (orderId: string) => prisma.orderEvent.count({ where: { orderId } });
   const codeOf = (result: PromiseRejectedResult) => ((result.reason as ApiError).getResponse() as { code: string }).code;

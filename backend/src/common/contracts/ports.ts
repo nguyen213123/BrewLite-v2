@@ -49,7 +49,8 @@ export abstract class OrderTransactionsPort {
   abstract prepareRetry(tx: Tx, order: StoredOrder): Promise<StoredOrder>;
 }
 export abstract class InventoryPort {
-  abstract reserve(tx: Tx, items: Api.CartItem[]): Promise<void>;
+  abstract check(tx: Tx, items: Api.CartItem[]): Promise<void>;
+  abstract reserve(tx: Tx, orderId: string, items: Api.CartItem[]): Promise<void>;
   abstract release(tx: Tx, order: StoredOrder): Promise<void>;
 }
 export abstract class PromotionsPort {
