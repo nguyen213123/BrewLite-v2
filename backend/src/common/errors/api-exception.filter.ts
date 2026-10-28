@@ -9,7 +9,7 @@ export class ApiExceptionFilter implements ExceptionFilter {
   catch(exception: unknown, host: ArgumentsHost) {
     const response = host.switchToHttp().getResponse<Response>();
     if (exception instanceof ApiError) {
-      if (exception.getStatus() >= 500 && exception.getStatus() !== 501) {
+      if (exception.getStatus() >= 500 && ![501, 502, 503].includes(exception.getStatus())) {
         this.internalError(response);
         return;
       }

@@ -4,19 +4,14 @@ import { Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { apiGet } from '@/lib/api';
+import { getUser } from '@/lib/auth';
 import { useCartStore } from '@/lib/cart/cart-store';
+import {
+  reconcileVnPayReturnOrder,
+  type VnPayVerifyResponse,
+} from '@/lib/checkout/vnpay-return';
+import type { Order } from '@/lib/contracts/api.generated';
 import { formatVnd } from '@/components/payments/payment-api';
-
-interface VnPayVerifyResponse {
-  success: boolean;
-  message: string;
-  orderCode: string;
-  orderId?: string;
-  amount?: number;
-  bankCode?: string;
-  transactionNo?: string;
-  responseCode?: string;
-}
 
 function VnPayReturnContent() {
   const searchParams = useSearchParams();
@@ -38,11 +33,33 @@ function VnPayReturnContent() {
 
         const res = await apiGet<VnPayVerifyResponse>(`/payments/vnpay/verify?${query}`);
         if (!active) return;
-        setResult(res);
 
-        if (res.success) {
-          useCartStore.getState().clear();
+        if (res.success && res.orderId) {
+          const { currentOrder } = await reconcileVnPayReturnOrder(res, {
+            userId: getUser()?.id,
+            readSession: (key) =>
+              typeof window !== 'undefined' ? window.sessionStorage.getItem(key) : null,
+            writeSession: (key, val) => {
+              if (typeof window !== 'undefined') window.sessionStorage.setItem(key, val);
+            },
+            findOrder: (orderId) => apiGet<Order>(`/orders/${orderId}`),
+            settleOrder: (orderId, purchased) =>
+              useCartStore.getState().settleOrder(orderId, purchased),
+          });
+          if (!active) return;
+
+          if (currentOrder && currentOrder.status === 'CANCELLED') {
+            setResult({
+              ...res,
+              success: false,
+              orderStatus: 'CANCELLED',
+              message: 'Đơn hàng này đã bị hủy hoặc đã hoàn tiền.',
+            });
+            return;
+          }
         }
+
+        setResult(res);
       } catch (err: unknown) {
         if (!active) return;
         const msg = err instanceof Error ? err.message : 'Lỗi kết nối khi xác thực giao dịch';
