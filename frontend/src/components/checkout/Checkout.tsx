@@ -861,7 +861,7 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
                 Thanh toán thất bại
               </h1>
               <p className="mt-2 text-sm text-[#7a6254]">
-                Cổng thanh toán mô phỏng ghi nhận giao dịch không thành công (PAYMENT_FAILED).
+                Cổng thanh toán ghi nhận giao dịch không thành công (PAYMENT_FAILED).
               </p>
             </div>
 

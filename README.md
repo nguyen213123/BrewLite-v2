@@ -44,12 +44,12 @@ Toàn bộ các trang được thiết kế đồng bộ theo bảng màu **Brew
 | `/` hoặc `/menu` | **Trang chủ & Thực đơn** | Hero banner BrewLite, danh sách đồ uống phân trang (`GET /api/products`), bộ khung thẻ kem cát và giới thiệu thương hiệu. |
 | `/products/[id]` | **Chi tiết đồ uống** | Chọn kích cỡ bắt buộc (`S` / `M` / `L`), chọn nhiều topping tùy ý, tự động tính số ly tồn kho theo size đang chọn, kiểm tra tồn kho topping, giới hạn số lượng theo nguyên liệu khả dụng, tính giá tạm tính và thêm vào giỏ. |
 | `/cart` | **Giỏ hàng** | Quản lý danh sách món đã chọn, gộp dòng cùng cấu hình, tăng/giảm số lượng (`1–99`), xem tạm tính và điểm thưởng dự kiến. |
-| `/checkout` | **Thanh toán & Đặt đơn** | Tiến trình 3 bước: **(1)** Kiểm tra giỏ & Báo giá khuyến mãi → **(2)** Tạo đơn giữ hàng & Thanh toán mô phỏng Ví/Thẻ (`SUCCESS` / `FAIL`) → **(3)** Xác nhận kết quả & Tích điểm. |
+| `/checkout` | **Thanh toán & Đặt đơn** | Tiến trình 3 bước: **(1)** Kiểm tra giỏ & Báo giá khuyến mãi → **(2)** Tạo đơn giữ hàng & Thanh toán qua cổng VNPay Sandbox → **(3)** Xác nhận kết quả & Tích điểm. |
 | `/orders` | **Lịch sử đơn hàng** | Danh sách các đơn đã đặt của tài khoản (`GET /api/orders/me`), hiển thị trạng thái đơn, trạng thái giữ kho và mã ưu đãi. |
 | `/orders/[id]` | **Chi tiết đơn hàng** | Snapshot chi tiết từng món/topping lúc đặt, tiếp tục thanh toán/hủy đơn; hỗ trợ nút chuyển trạng thái pha chế (`PREPARING` → `READY` → `COMPLETED`) cho tài khoản `STAFF`. |
 | `/loyalty` | **Điểm thưởng Loyalty** | Xem tổng điểm hiện tại (`GET /api/loyalty/me`), quy tắc tích điểm (`10.000₫ = 1 điểm`) và sổ cái biến động điểm (`EARN` / `REVERSE`). |
 | `/login`, `/register` | **Đăng nhập / Đăng ký** | Xác thực khách hàng & nhân viên bằng JWT Bearer token. |
-| `/payments` | **Chuyển hướng thanh toán** | Tự động chuyển hướng về `/checkout` (giao diện showcase độc lập được giữ tại `/payments/demo`). |
+| `/payments` | **Chuyển hướng thanh toán** | Tự động chuyển hướng về `/checkout`; trang kết quả callback VNPay tại `/payments/vnpay-return`. |
 
 ### Quy tắc luồng đặt hàng & Thanh toán an toàn
 

@@ -316,7 +316,7 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
                     </h3>
                     <p className="m-0 mt-1 text-xs text-[#7a6254]">
                       {order.status === 'PAID'
-                        ? 'Đơn hàng chưa bắt đầu pha chế. Khi hủy, hệ thống sẽ tự động hoàn trả thanh toán mô phỏng, hoàn tồn kho, hoàn lượt mã khuyến mãi và đảo điểm thưởng Loyalty.'
+                        ? 'Đơn hàng chưa bắt đầu pha chế. Khi hủy, hệ thống sẽ thực hiện hoàn tiền qua cổng thanh toán, hoàn tồn kho, hoàn lượt mã khuyến mãi và đảo điểm thưởng Loyalty.'
                         : 'Hàng trong kho và mã ưu đãi đã giữ sẽ được hoàn trả lại ngay lập tức.'}
                     </p>
                   </div>
