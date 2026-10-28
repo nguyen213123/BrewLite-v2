@@ -395,14 +395,18 @@ export class VnPayService {
     const isContextValid =
       json.vnp_TmnCode === config.tmnCode &&
       json.vnp_TxnRef === input.txnRef &&
-      (!json.vnp_Command || json.vnp_Command === 'querydr') &&
+      json.vnp_Command === 'querydr' &&
+      typeof json.vnp_TransactionType === 'string' &&
+      json.vnp_TransactionType.length > 0 &&
+      typeof json.vnp_TransactionStatus === 'string' &&
+      json.vnp_TransactionStatus.length > 0 &&
       (input.expectedAmount === undefined || json.vnp_Amount === String(input.expectedAmount * 100));
 
     if (!isContextValid) {
       throw new ApiError(
         502,
         'VNPAY_GATEWAY_ERROR',
-        'Thông tin đối soát phản hồi từ cổng VNPay (merchant, mã tham chiếu hoặc số tiền) không khớp với giao dịch đã lưu',
+        'Thông tin đối soát phản hồi từ cổng VNPay (merchant, mã tham chiếu, loại/trạng thái giao dịch hoặc số tiền) không khớp với giao dịch đã lưu',
       );
     }
 
@@ -416,8 +420,8 @@ export class VnPayService {
       vnp_BankCode: json.vnp_BankCode ?? '',
       vnp_PayDate: json.vnp_PayDate ?? input.transactionDate,
       vnp_TransactionNo: json.vnp_TransactionNo ?? '',
-      vnp_TransactionType: json.vnp_TransactionType ?? '01',
-      vnp_TransactionStatus: json.vnp_TransactionStatus ?? '00',
+      vnp_TransactionType: json.vnp_TransactionType,
+      vnp_TransactionStatus: json.vnp_TransactionStatus,
       vnp_Command: 'querydr',
     };
   }

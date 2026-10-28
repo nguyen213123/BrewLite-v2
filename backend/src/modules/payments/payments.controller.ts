@@ -383,9 +383,11 @@ export class PaymentsController {
       const isRefundConfirmedByGateway =
         gatewayResult.vnp_TransactionType === '02' &&
         gatewayResult.vnp_TransactionStatus === '00';
-      const isRefundStillProcessing =
-        gatewayResult.vnp_TransactionStatus === '01' ||
-        gatewayResult.vnp_TransactionStatus === '94';
+      const isDefinitivelyNotRefunded =
+        (gatewayResult.vnp_TransactionType === '01' &&
+          gatewayResult.vnp_TransactionStatus === '00') ||
+        (gatewayResult.vnp_TransactionType === '02' &&
+          ['02', '07', '09'].includes(gatewayResult.vnp_TransactionStatus));
 
       if (isRefundConfirmedByGateway) {
         await this.prisma.$transaction(async (tx) => {
@@ -429,8 +431,8 @@ export class PaymentsController {
         currentRefundStatus = 'REFUNDED';
         message =
           'Đối soát thành công: Cổng VNPay xác nhận yêu cầu hoàn tiền trước đó đã hoàn tất, đã đồng bộ hủy đơn và hoàn kho';
-      } else if (!isRefundStillProcessing) {
-        // Cổng VNPay xác nhận giao dịch chưa hoàn tiền và không còn lệnh hoàn tiền đang xử lý -> mở khóa để cho phép thao tác tiếp
+      } else if (isDefinitivelyNotRefunded) {
+        // Cổng VNPay xác nhận rõ ràng giao dịch chưa hoàn tiền và không có lệnh hoàn tiền đang xử lý -> mở khóa để cho phép thao tác tiếp
         await this.prisma.idempotencyRecord.update({
           where: { id: target.payment.idempotencyRecordId },
           data: {

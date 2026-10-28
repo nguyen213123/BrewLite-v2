@@ -298,6 +298,23 @@ export class OrdersService implements OrdersPort {
     if (!STAFF_STATUSES.includes(input.status)) {
       throw new ApiError(409, 'INVALID_ORDER_TRANSITION', `Không thể chuyển sang ${input.status} bằng endpoint này`);
     }
+    if (this.prisma) {
+      const existingOrder = await this.prisma.order.findUnique({
+        where: { id: orderId },
+        include: { payments: { include: { idempotency: true } } },
+      });
+      const pendingRefund = existingOrder?.payments.some((p) => {
+        const meta = (p.idempotency?.response ?? {}) as Record<string, unknown>;
+        return meta.refundStatus === 'PENDING_RECONCILIATION' || p.idempotency?.httpStatus === 201;
+      });
+      if (pendingRefund) {
+        throw new ApiError(
+          409,
+          'REFUND_PENDING_RECONCILIATION',
+          'Đơn hàng đang có yêu cầu hoàn tiền VNPay chờ đối soát, không thể chuyển trạng thái pha chế trước khi đối soát xong',
+        );
+      }
+    }
     return this.unitOfWork.run(async tx => {
       const updated = await this.transitions.transition(tx, {
         orderId,
