@@ -367,18 +367,102 @@ export class PaymentsController {
       txnRef: target.txnRef,
       transactionDate: target.payDate,
       orderCode: target.order.code,
+      expectedAmount: target.payment.amount,
       ipAddr,
     });
 
+    let currentOrderStatus = target.order.status;
+    let currentPaymentStatus = target.payment.status;
+    let currentRefundStatus =
+      typeof target.meta.refundStatus === 'string' ? target.meta.refundStatus : undefined;
+    let message = 'Đối soát thành công: Cổng VNPay xác nhận giao dịch hợp lệ (vnp_ResponseCode = 00)';
+
+    // Nếu giao dịch đang ở trạng thái chờ đối soát hoàn tiền (PENDING_RECONCILIATION),
+    // cập nhật trạng thái theo kết quả đối soát đã xác minh chữ ký từ cổng VNPay:
+    if (target.meta.refundStatus === 'PENDING_RECONCILIATION') {
+      const isRefundConfirmedByGateway =
+        gatewayResult.vnp_TransactionType === '02' &&
+        gatewayResult.vnp_TransactionStatus === '00';
+      const isRefundStillProcessing =
+        gatewayResult.vnp_TransactionStatus === '01' ||
+        gatewayResult.vnp_TransactionStatus === '94';
+
+      if (isRefundConfirmedByGateway) {
+        await this.prisma.$transaction(async (tx) => {
+          const currentOrder = await tx.order.findUnique({
+            where: { id: target.order.id },
+            include: { items: { include: { toppings: true } } },
+          });
+
+          if (currentOrder && currentOrder.status === 'PAID') {
+            await this.orderTransactions.transition(tx, {
+              orderId: currentOrder.id,
+              actorUserId: user.id,
+              expectedVersion: currentOrder.version,
+              toStatus: 'CANCELLED',
+            });
+            await this.loyaltyTransactions.reverse(tx, currentOrder);
+          }
+
+          await tx.payment.update({
+            where: { id: target.payment.id },
+            data: { status: 'REFUNDED' },
+          });
+
+          await tx.idempotencyRecord.update({
+            where: { id: target.payment.idempotencyRecordId },
+            data: {
+              status: 'COMPLETED',
+              httpStatus: 200,
+              response: {
+                ...target.meta,
+                refundStatus: 'REFUNDED',
+                refundTransactionNo: gatewayResult.vnp_TransactionNo,
+                refundResponseCode: gatewayResult.vnp_ResponseCode,
+              },
+            },
+          });
+        });
+
+        currentOrderStatus = 'CANCELLED';
+        currentPaymentStatus = 'REFUNDED';
+        currentRefundStatus = 'REFUNDED';
+        message =
+          'Đối soát thành công: Cổng VNPay xác nhận yêu cầu hoàn tiền trước đó đã hoàn tất, đã đồng bộ hủy đơn và hoàn kho';
+      } else if (!isRefundStillProcessing) {
+        // Cổng VNPay xác nhận giao dịch chưa hoàn tiền và không còn lệnh hoàn tiền đang xử lý -> mở khóa để cho phép thao tác tiếp
+        await this.prisma.idempotencyRecord.update({
+          where: { id: target.payment.idempotencyRecordId },
+          data: {
+            status: 'COMPLETED',
+            httpStatus: 200,
+            response: {
+              ...target.meta,
+              refundStatus: 'RECONCILED_NOT_REFUNDED',
+              lastQueryTransactionType: gatewayResult.vnp_TransactionType,
+              lastQueryTransactionStatus: gatewayResult.vnp_TransactionStatus,
+            },
+          },
+        });
+        currentRefundStatus = 'RECONCILED_NOT_REFUNDED';
+        message =
+          'Đối soát thành công: Cổng VNPay xác nhận giao dịch chưa hoàn tiền, đã mở khóa để cho phép thao tác tiếp';
+      } else {
+        message =
+          'Đối soát thành công: Yêu cầu hoàn tiền vẫn đang được cổng VNPay xử lý, tiếp tục giữ trạng thái chờ đối soát';
+      }
+    }
+
     return {
       success: true,
-      message: 'Đối soát thành công: Cổng VNPay xác nhận giao dịch hợp lệ (vnp_ResponseCode = 00)',
+      message,
       transaction: {
         paymentId: target.payment.id,
         orderId: target.order.id,
         orderCode: target.order.code,
-        orderStatus: target.order.status,
-        paymentStatus: target.payment.status,
+        orderStatus: currentOrderStatus,
+        paymentStatus: currentPaymentStatus,
+        refundStatus: currentRefundStatus,
         amount: target.payment.amount,
         transactionNo: target.transactionNo,
         txnRef: target.txnRef,

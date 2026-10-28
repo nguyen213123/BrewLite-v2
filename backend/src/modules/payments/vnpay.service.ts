@@ -79,6 +79,56 @@ export function sortAndEncode(obj: Record<string, string>): { signData: string; 
   return { signData, queryString: signData };
 }
 
+export function computeVnPayQueryDrResponseHash(
+  json: Record<string, string | undefined>,
+  hashSecret: string,
+): string {
+  const expectedData = [
+    json.vnp_ResponseId ?? '',
+    json.vnp_Command ?? '',
+    json.vnp_ResponseCode ?? '',
+    json.vnp_Message ?? '',
+    json.vnp_TmnCode ?? '',
+    json.vnp_TxnRef ?? '',
+    json.vnp_Amount ?? '',
+    json.vnp_BankCode ?? '',
+    json.vnp_PayDate ?? '',
+    json.vnp_TransactionNo ?? '',
+    json.vnp_TransactionType ?? '',
+    json.vnp_TransactionStatus ?? '',
+    json.vnp_OrderInfo ?? '',
+    json.vnp_PromotionCode ?? '',
+    json.vnp_PromotionAmount ?? '',
+  ].join('|');
+  return createHmac('sha512', hashSecret)
+    .update(Buffer.from(expectedData, 'utf-8'))
+    .digest('hex');
+}
+
+export function computeVnPayRefundResponseHash(
+  json: Record<string, string | undefined>,
+  hashSecret: string,
+): string {
+  const expectedData = [
+    json.vnp_ResponseId ?? '',
+    json.vnp_Command ?? '',
+    json.vnp_ResponseCode ?? '',
+    json.vnp_Message ?? '',
+    json.vnp_TmnCode ?? '',
+    json.vnp_TxnRef ?? '',
+    json.vnp_Amount ?? '',
+    json.vnp_BankCode ?? '',
+    json.vnp_PayDate ?? '',
+    json.vnp_TransactionNo ?? '',
+    json.vnp_TransactionType ?? '',
+    json.vnp_TransactionStatus ?? '',
+    json.vnp_OrderInfo ?? '',
+  ].join('|');
+  return createHmac('sha512', hashSecret)
+    .update(Buffer.from(expectedData, 'utf-8'))
+    .digest('hex');
+}
+
 @Injectable()
 export class VnPayService {
   /**
@@ -251,6 +301,7 @@ export class VnPayService {
     txnRef: string;
     transactionDate: string;
     orderCode: string;
+    expectedAmount?: number;
     ipAddr?: string;
   }): Promise<VnPayGatewayApiResult> {
     const config = this.getConfig(true);
@@ -323,30 +374,14 @@ export class VnPayService {
       throw new ApiError(502, 'VNPAY_GATEWAY_ERROR', 'Phản hồi từ cổng VNPay không đúng định dạng JSON');
     }
 
-    if (json.vnp_SecureHash) {
-      const expectedData = [
-        json.vnp_ResponseId ?? '',
-        json.vnp_Command ?? '',
-        json.vnp_ResponseCode ?? '',
-        json.vnp_Message ?? '',
-        json.vnp_TmnCode ?? '',
-        json.vnp_TxnRef ?? '',
-        json.vnp_Amount ?? '',
-        json.vnp_BankCode ?? '',
-        json.vnp_PayDate ?? '',
-        json.vnp_TransactionNo ?? '',
-        json.vnp_TransactionType ?? '',
-        json.vnp_TransactionStatus ?? '',
-        json.vnp_OrderInfo ?? '',
-        json.vnp_PromotionCode ?? '',
-        json.vnp_PromotionAmount ?? '',
-      ].join('|');
-      const expectedHash = createHmac('sha512', config.hashSecret)
-        .update(Buffer.from(expectedData, 'utf-8'))
-        .digest('hex');
-      if (json.vnp_SecureHash.toLowerCase() !== expectedHash.toLowerCase()) {
-        throw new ApiError(502, 'VNPAY_INVALID_SIGNATURE', 'Chữ ký phản hồi đối soát từ cổng VNPay không hợp lệ');
-      }
+    const responseHash = typeof json.vnp_SecureHash === 'string' ? json.vnp_SecureHash.trim() : '';
+    const expectedHash = computeVnPayQueryDrResponseHash(json, config.hashSecret);
+    if (!responseHash || responseHash.toLowerCase() !== expectedHash.toLowerCase()) {
+      throw new ApiError(
+        502,
+        'VNPAY_INVALID_SIGNATURE',
+        'Thiếu hoặc sai chữ ký số (vnp_SecureHash) trong phản hồi đối soát từ cổng VNPay',
+      );
     }
 
     if (json.vnp_ResponseCode !== '00') {
@@ -357,12 +392,26 @@ export class VnPayService {
       );
     }
 
+    const isContextValid =
+      json.vnp_TmnCode === config.tmnCode &&
+      json.vnp_TxnRef === input.txnRef &&
+      (!json.vnp_Command || json.vnp_Command === 'querydr') &&
+      (input.expectedAmount === undefined || json.vnp_Amount === String(input.expectedAmount * 100));
+
+    if (!isContextValid) {
+      throw new ApiError(
+        502,
+        'VNPAY_GATEWAY_ERROR',
+        'Thông tin đối soát phản hồi từ cổng VNPay (merchant, mã tham chiếu hoặc số tiền) không khớp với giao dịch đã lưu',
+      );
+    }
+
     return {
       outcome: 'SUCCEEDED',
       vnp_ResponseCode: json.vnp_ResponseCode,
       vnp_Message: json.vnp_Message ?? 'QueryDR Success',
-      vnp_TmnCode: json.vnp_TmnCode ?? config.tmnCode,
-      vnp_TxnRef: json.vnp_TxnRef ?? input.txnRef,
+      vnp_TmnCode: json.vnp_TmnCode,
+      vnp_TxnRef: json.vnp_TxnRef,
       vnp_Amount: json.vnp_Amount ?? '0',
       vnp_BankCode: json.vnp_BankCode ?? '',
       vnp_PayDate: json.vnp_PayDate ?? input.transactionDate,
@@ -375,8 +424,9 @@ export class VnPayService {
 
   /**
    * Gửi lệnh hoàn tiền giao dịch sang cổng VNPay Sandbox (vnp_Command = 'refund', vnp_TransactionType = '02')
-   * Chỉ trả về outcome = 'SUCCEEDED' khi cổng VNPay xác nhận hợp lệ (vnp_ResponseCode === '00').
-   * Nếu mất kết nối, timeout hoặc lỗi hệ thống 99, trả về outcome = 'UNCERTAIN' để giữ trạng thái chờ đối soát.
+   * - Bắt buộc có chữ ký hợp lệ (vnp_SecureHash) trước khi xác nhận kết quả.
+   * - Đối chiếu merchant (vnp_TmnCode), mã tham chiếu (vnp_TxnRef), số tiền (vnp_Amount), lệnh (vnp_Command), loại giao dịch (vnp_TransactionType) với yêu cầu đã lưu.
+   * - Phản hồi thiếu/sai chữ ký, thiếu/sai dữ liệu giao dịch, mất kết nối, timeout hoặc trả mã 94 / 99 / 08 đều trả về outcome = 'UNCERTAIN' để giữ trạng thái chờ đối soát (PENDING_RECONCILIATION).
    */
   async refundTransaction(input: {
     txnRef: string;
@@ -464,7 +514,7 @@ export class VnPayService {
 
     if (!res.ok) {
       return {
-        outcome: res.status >= 500 || res.status === 408 || res.status === 429 ? 'UNCERTAIN' : 'REJECTED',
+        outcome: 'UNCERTAIN',
         vnp_ResponseCode: String(res.status),
         vnp_Message: `Cổng VNPay trả về HTTP ${res.status}`,
         vnp_TmnCode: config.tmnCode,
@@ -499,66 +549,90 @@ export class VnPayService {
       };
     }
 
-    if (json.vnp_SecureHash) {
-      const expectedData = [
-        json.vnp_ResponseId ?? '',
-        json.vnp_Command ?? '',
-        json.vnp_ResponseCode ?? '',
-        json.vnp_Message ?? '',
-        json.vnp_TmnCode ?? '',
-        json.vnp_TxnRef ?? '',
-        json.vnp_Amount ?? '',
-        json.vnp_BankCode ?? '',
-        json.vnp_PayDate ?? '',
-        json.vnp_TransactionNo ?? '',
-        json.vnp_TransactionType ?? '',
-        json.vnp_TransactionStatus ?? '',
-        json.vnp_OrderInfo ?? '',
-      ].join('|');
-      const expectedHash = createHmac('sha512', config.hashSecret)
-        .update(Buffer.from(expectedData, 'utf-8'))
-        .digest('hex');
-      if (json.vnp_SecureHash.toLowerCase() !== expectedHash.toLowerCase()) {
-        return {
-          outcome: 'UNCERTAIN',
-          vnp_ResponseCode: '97',
-          vnp_Message: 'Chữ ký phản hồi hoàn tiền từ cổng VNPay không hợp lệ',
-          vnp_TmnCode: json.vnp_TmnCode ?? config.tmnCode,
-          vnp_TxnRef: json.vnp_TxnRef ?? input.txnRef,
-          vnp_Amount: json.vnp_Amount ?? amountStr,
-          vnp_BankCode: json.vnp_BankCode ?? '',
-          vnp_PayDate: json.vnp_PayDate ?? createDate,
-          vnp_TransactionNo: json.vnp_TransactionNo ?? input.transactionNo,
-          vnp_TransactionType: transactionType,
-          vnp_TransactionStatus: json.vnp_TransactionStatus ?? '99',
-          vnp_Command: 'refund',
-        };
-      }
+    // 1. Bắt buộc phải có vnp_SecureHash hợp lệ
+    const responseHash = typeof json.vnp_SecureHash === 'string' ? json.vnp_SecureHash.trim() : '';
+    const expectedHash = computeVnPayRefundResponseHash(json, config.hashSecret);
+    if (!responseHash || responseHash.toLowerCase() !== expectedHash.toLowerCase()) {
+      return {
+        outcome: 'UNCERTAIN',
+        vnp_ResponseCode: '97',
+        vnp_Message: 'Thiếu hoặc sai chữ ký số (vnp_SecureHash) trong phản hồi hoàn tiền từ cổng VNPay',
+        vnp_TmnCode: json.vnp_TmnCode ?? config.tmnCode,
+        vnp_TxnRef: json.vnp_TxnRef ?? input.txnRef,
+        vnp_Amount: json.vnp_Amount ?? amountStr,
+        vnp_BankCode: json.vnp_BankCode ?? '',
+        vnp_PayDate: json.vnp_PayDate ?? createDate,
+        vnp_TransactionNo: json.vnp_TransactionNo ?? input.transactionNo,
+        vnp_TransactionType: json.vnp_TransactionType ?? transactionType,
+        vnp_TransactionStatus: json.vnp_TransactionStatus ?? '99',
+        vnp_Command: 'refund',
+      };
     }
 
-    const responseCode = json.vnp_ResponseCode ?? '99';
-    const transactionStatus = json.vnp_TransactionStatus ?? responseCode;
-    const isConfirmedSuccess =
-      responseCode === '00' &&
-      (transactionStatus === '00' || !json.vnp_TransactionStatus) &&
-      (!json.vnp_TmnCode || json.vnp_TmnCode === config.tmnCode) &&
-      (!json.vnp_TxnRef || json.vnp_TxnRef === input.txnRef);
+    // 2. Đối chiếu đầy đủ merchant, mã tham chiếu, số tiền, lệnh và loại giao dịch với yêu cầu đã lưu
+    const isMerchantMatched = json.vnp_TmnCode === config.tmnCode;
+    const isTxnRefMatched = json.vnp_TxnRef === input.txnRef;
+    const isAmountMatched = json.vnp_Amount === amountStr;
+    const isCommandMatched = json.vnp_Command === command;
+    const isTxTypeMatched = json.vnp_TransactionType === transactionType;
+    const isOrderInfoMatched = !json.vnp_OrderInfo || json.vnp_OrderInfo === orderInfo;
 
-    // Mã 99 hoặc 08 trên VNPay biểu thị lỗi hệ thống / timeout chưa rõ kết quả -> cần giữ trạng thái chờ đối soát
-    const isUncertain = !isConfirmedSuccess && (responseCode === '99' || responseCode === '08');
+    if (
+      !isMerchantMatched ||
+      !isTxnRefMatched ||
+      !isAmountMatched ||
+      !isCommandMatched ||
+      !isTxTypeMatched ||
+      !isOrderInfoMatched
+    ) {
+      return {
+        outcome: 'UNCERTAIN',
+        vnp_ResponseCode: json.vnp_ResponseCode ?? '99',
+        vnp_Message:
+          'Phản hồi hoàn tiền từ cổng VNPay thiếu hoặc sai thông tin giao dịch (merchant, mã tham chiếu, số tiền hoặc loại giao dịch)',
+        vnp_TmnCode: json.vnp_TmnCode ?? '',
+        vnp_TxnRef: json.vnp_TxnRef ?? '',
+        vnp_Amount: json.vnp_Amount ?? '',
+        vnp_BankCode: json.vnp_BankCode ?? '',
+        vnp_PayDate: json.vnp_PayDate ?? createDate,
+        vnp_TransactionNo: json.vnp_TransactionNo ?? input.transactionNo,
+        vnp_TransactionType: json.vnp_TransactionType ?? '',
+        vnp_TransactionStatus: json.vnp_TransactionStatus ?? '99',
+        vnp_Command: 'refund',
+      };
+    }
+
+    const responseCode = json.vnp_ResponseCode ?? '';
+    const transactionStatus = json.vnp_TransactionStatus ?? '';
+
+    // 3. Chỉ xác nhận hoàn tiền thành công khi cả vnp_ResponseCode === '00' VÀ vnp_TransactionStatus === '00'
+    const isConfirmedSuccess = responseCode === '00' && transactionStatus === '00';
+
+    // Mã 94 (yêu cầu hoàn tiền trước đó đang được xử lý), 99, 08 hoặc responseCode = '00' nhưng thiếu/sai transactionStatus
+    // đều được giữ ở trạng thái chờ đối soát (UNCERTAIN -> PENDING_RECONCILIATION), không mở khóa và không gửi hoàn tiền lặp
+    const isUncertain =
+      !isConfirmedSuccess &&
+      (responseCode === '00' ||
+        responseCode === '94' ||
+        responseCode === '99' ||
+        responseCode === '08' ||
+        transactionStatus === '94' ||
+        transactionStatus === '01' ||
+        transactionStatus === '99' ||
+        responseCode.length === 0);
 
     return {
       outcome: isConfirmedSuccess ? 'SUCCEEDED' : isUncertain ? 'UNCERTAIN' : 'REJECTED',
-      vnp_ResponseCode: responseCode,
+      vnp_ResponseCode: responseCode || '99',
       vnp_Message: json.vnp_Message ?? (isConfirmedSuccess ? 'Refund Success' : 'Refund Failed'),
-      vnp_TmnCode: json.vnp_TmnCode ?? config.tmnCode,
-      vnp_TxnRef: json.vnp_TxnRef ?? input.txnRef,
-      vnp_Amount: json.vnp_Amount ?? amountStr,
+      vnp_TmnCode: json.vnp_TmnCode,
+      vnp_TxnRef: json.vnp_TxnRef,
+      vnp_Amount: json.vnp_Amount,
       vnp_BankCode: json.vnp_BankCode ?? '',
       vnp_PayDate: json.vnp_PayDate ?? createDate,
       vnp_TransactionNo: json.vnp_TransactionNo ?? input.transactionNo,
-      vnp_TransactionType: json.vnp_TransactionType ?? transactionType,
-      vnp_TransactionStatus: transactionStatus,
+      vnp_TransactionType: json.vnp_TransactionType,
+      vnp_TransactionStatus: transactionStatus || responseCode || '99',
       vnp_Command: 'refund',
     };
   }

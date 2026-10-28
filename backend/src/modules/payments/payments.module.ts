@@ -9,7 +9,6 @@ import { PaymentsController } from './payments.controller';
 import { PaymentsService } from './payments.service';
 import { PaymentsPort, MockPaymentGatewayPort } from '../../common/contracts/ports';
 import { MockPaymentGatewayService } from './mock-payment-gateway.service';
-import { VnPayService } from './vnpay.service';
 
 @Module({
   imports: [
@@ -26,8 +25,7 @@ import { VnPayService } from './vnpay.service';
     { provide: PaymentsPort, useExisting: PaymentsService },
     MockPaymentGatewayService,
     { provide: MockPaymentGatewayPort, useExisting: MockPaymentGatewayService },
-    VnPayService,
   ],
-  exports: [PaymentsPort, MockPaymentGatewayPort, VnPayService],
+  exports: [PaymentsPort, MockPaymentGatewayPort],
 })
 export class PaymentsModule {}

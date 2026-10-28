@@ -5,7 +5,11 @@ import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/setup';
 import { PrismaService } from '../src/prisma/prisma.service';
-import { sortAndEncode } from '../src/modules/payments/vnpay.service';
+import {
+  computeVnPayQueryDrResponseHash,
+  computeVnPayRefundResponseHash,
+  sortAndEncode,
+} from '../src/modules/payments/vnpay.service';
 import { createTempDatabase, type TempDatabase } from './support/temp-database';
 
 const integration = process.env.RUN_DB_TESTS === '1' ? describe : describe.skip;
@@ -25,6 +29,77 @@ function buildSignedVnPayCallback(
   return {
     ...params,
     vnp_SecureHash: secureHash,
+  };
+}
+
+function buildSignedRefundGatewayResponse(
+  params: {
+    txnRef: string;
+    orderCode: string;
+    amount: number;
+    responseCode?: string;
+    transactionStatus?: string;
+    message?: string;
+    transactionNo?: string;
+    tmnCode?: string;
+    command?: string;
+    transactionType?: string;
+  },
+  secret = TEST_HASH_SECRET,
+): Record<string, string> {
+  const body: Record<string, string> = {
+    vnp_ResponseId: 'REFUND_RES_01',
+    vnp_Command: params.command ?? 'refund',
+    vnp_ResponseCode: params.responseCode ?? '00',
+    vnp_Message: params.message ?? 'Refund Success',
+    vnp_TmnCode: params.tmnCode ?? TEST_TMN_CODE,
+    vnp_TxnRef: params.txnRef,
+    vnp_Amount: String(params.amount * 100),
+    vnp_BankCode: 'NCB',
+    vnp_PayDate: '20261028152500',
+    vnp_TransactionNo: params.transactionNo ?? '15889000',
+    vnp_TransactionType: params.transactionType ?? '02',
+    vnp_TransactionStatus: params.transactionStatus ?? params.responseCode ?? '00',
+    vnp_OrderInfo: `Hoan tien don hang ${params.orderCode}`,
+  };
+  return {
+    ...body,
+    vnp_SecureHash: computeVnPayRefundResponseHash(body, secret),
+  };
+}
+
+function buildSignedQueryDrGatewayResponse(
+  params: {
+    txnRef: string;
+    orderCode: string;
+    amount: number;
+    responseCode?: string;
+    transactionType?: string;
+    transactionStatus?: string;
+    message?: string;
+  },
+  secret = TEST_HASH_SECRET,
+): Record<string, string> {
+  const body: Record<string, string> = {
+    vnp_ResponseId: 'QUERY_RES_01',
+    vnp_Command: 'querydr',
+    vnp_ResponseCode: params.responseCode ?? '00',
+    vnp_Message: params.message ?? 'QueryDR Success',
+    vnp_TmnCode: TEST_TMN_CODE,
+    vnp_TxnRef: params.txnRef,
+    vnp_Amount: String(params.amount * 100),
+    vnp_BankCode: 'NCB',
+    vnp_PayDate: '20261028152500',
+    vnp_TransactionNo: '15889000',
+    vnp_TransactionType: params.transactionType ?? '01',
+    vnp_TransactionStatus: params.transactionStatus ?? '00',
+    vnp_OrderInfo: `Truy van giao dich ${params.orderCode}`,
+    vnp_PromotionCode: '',
+    vnp_PromotionAmount: '',
+  };
+  return {
+    ...body,
+    vnp_SecureHash: computeVnPayQueryDrResponseHash(body, secret),
   };
 }
 
@@ -328,15 +403,19 @@ integration('VNPay PostgreSQL Integration: Auth, Callback, IPN Concurrency & Ref
       .send({ orderId: order.id })
       .expect(404);
 
-    // 3. Khi cổng VNPay trả về lỗi 91 (từ chối hoàn tiền) -> báo lỗi 502, KHÔNG cập nhật REFUNDED, đơn vẫn PAID
+    // 3. Khi cổng VNPay trả về lỗi 91 có chữ ký hợp lệ (từ chối hoàn tiền) -> báo lỗi 502, KHÔNG cập nhật REFUNDED, đơn vẫn PAID
     jest.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
       new Response(
-        JSON.stringify({
-          vnp_ResponseCode: '91',
-          vnp_Message: 'Transaction not found',
-          vnp_TmnCode: TEST_TMN_CODE,
-          vnp_TxnRef: txnRef,
-        }),
+        JSON.stringify(
+          buildSignedRefundGatewayResponse({
+            txnRef,
+            orderCode: order.code,
+            amount: order.total,
+            responseCode: '91',
+            transactionStatus: '91',
+            message: 'Transaction not found',
+          }),
+        ),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
       ),
     );
@@ -364,20 +443,21 @@ integration('VNPay PostgreSQL Integration: Auth, Callback, IPN Concurrency & Ref
       data: { loyaltyPoints: { increment: 9 } },
     });
 
-    // 4. Khi cổng VNPay xác nhận hoàn tiền hợp lệ (vnp_ResponseCode = '00') và có nhiều request hoàn tiền đồng thời:
+    // 4. Khi cổng VNPay xác nhận hoàn tiền hợp lệ có chữ ký (vnp_ResponseCode = '00') và có nhiều request hoàn tiền đồng thời:
     // chỉ 1 request thành công (200), các request đồng thời bị chặn (409), tồn kho, voucher và điểm thưởng được hoàn/đảo
     jest.spyOn(globalThis, 'fetch').mockImplementation(async () => {
       await new Promise((r) => setTimeout(r, 40));
       return new Response(
-        JSON.stringify({
-          vnp_ResponseCode: '00',
-          vnp_TransactionStatus: '00',
-          vnp_Message: 'Refund Success',
-          vnp_TmnCode: TEST_TMN_CODE,
-          vnp_TxnRef: txnRef,
-          vnp_TransactionNo: '15889000',
-          vnp_TransactionType: '02',
-        }),
+        JSON.stringify(
+          buildSignedRefundGatewayResponse({
+            txnRef,
+            orderCode: order.code,
+            amount: order.total,
+            responseCode: '00',
+            transactionStatus: '00',
+            message: 'Refund Success',
+          }),
+        ),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
       );
     });
@@ -523,5 +603,320 @@ integration('VNPay PostgreSQL Integration: Auth, Callback, IPN Concurrency & Ref
       .send({ orderId: uncertainOrder.id })
       .expect(409);
     expect(duplicateWhileUncertain.body.code).toBe('REFUND_PENDING_RECONCILIATION');
+  });
+
+  it('[Review 2 - #1] bắt buộc xác minh chữ ký phản hồi hoàn tiền: thiếu chữ ký ({"vnp_ResponseCode":"00"}), sai chữ ký hoặc sai thông tin giao dịch đều giữ ở PENDING_RECONCILIATION, không cập nhật REFUNDED', async () => {
+    const { order } = await createOrderFixture(20, customerAToken);
+    const urlRes = await request(app.getHttpServer())
+      .post('/api/payments/vnpay/create-url')
+      .auth(customerAToken, { type: 'bearer' })
+      .send({ orderId: order.id })
+      .expect(201);
+    const txnRef = urlRes.body.txnRef as string;
+
+    await request(app.getHttpServer())
+      .get('/api/payments/vnpay/ipn')
+      .query(
+        buildSignedVnPayCallback({
+          vnp_Amount: String(order.total * 100),
+          vnp_BankCode: 'NCB',
+          vnp_OrderInfo: `Thanh toan don hang ${order.code}`,
+          vnp_PayDate: '20261028160000',
+          vnp_ResponseCode: '00',
+          vnp_TmnCode: TEST_TMN_CODE,
+          vnp_TransactionNo: '16000001',
+          vnp_TransactionStatus: '00',
+          vnp_TxnRef: txnRef,
+        }),
+      )
+      .expect(200);
+
+    // 1. Phản hồi chỉ chứa {"vnp_ResponseCode":"00"} (thiếu vnp_SecureHash) -> 502 VNPAY_REFUND_UNCERTAIN, giữ PENDING_RECONCILIATION
+    jest.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(JSON.stringify({ vnp_ResponseCode: '00' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    const noSigRefund = await request(app.getHttpServer())
+      .post('/api/payments/vnpay/refund')
+      .auth(customerAToken, { type: 'bearer' })
+      .send({ orderId: order.id })
+      .expect(502);
+    expect(noSigRefund.body.code).toBe('VNPAY_REFUND_UNCERTAIN');
+
+    const paymentAfterNoSig = await prisma.payment.findFirstOrThrow({ where: { orderId: order.id } });
+    expect(paymentAfterNoSig.status).toBe('SUCCEEDED');
+    const orderAfterNoSig = await prisma.order.findUniqueOrThrow({ where: { id: order.id } });
+    expect(orderAfterNoSig.status).toBe('PAID');
+
+    // Đối soát QueryDR xác nhận chưa hoàn tiền -> mở khóa để test tiếp trường hợp sai chữ ký & sai số tiền
+    jest.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(
+        JSON.stringify(
+          buildSignedQueryDrGatewayResponse({
+            txnRef,
+            orderCode: order.code,
+            amount: order.total,
+            transactionType: '01',
+            transactionStatus: '00',
+          }),
+        ),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    await request(app.getHttpServer())
+      .post('/api/payments/vnpay/querydr')
+      .auth(customerAToken, { type: 'bearer' })
+      .send({ orderId: order.id })
+      .expect(200);
+
+    // 2. Phản hồi có vnp_ResponseCode = '00' và chữ ký hợp lệ nhưng sai số tiền (amount = 10.000đ thay vì 90.000đ) -> giữ PENDING_RECONCILIATION
+    jest.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(
+        JSON.stringify(
+          buildSignedRefundGatewayResponse({
+            txnRef,
+            orderCode: order.code,
+            amount: 10000, // Sai số tiền
+            responseCode: '00',
+            transactionStatus: '00',
+          }),
+        ),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    const wrongAmountRefund = await request(app.getHttpServer())
+      .post('/api/payments/vnpay/refund')
+      .auth(customerAToken, { type: 'bearer' })
+      .send({ orderId: order.id })
+      .expect(502);
+    expect(wrongAmountRefund.body.code).toBe('VNPAY_REFUND_UNCERTAIN');
+
+    const paymentAfterWrongAmount = await prisma.payment.findFirstOrThrow({
+      where: { orderId: order.id },
+    });
+    expect(paymentAfterWrongAmount.status).toBe('SUCCEEDED');
+  });
+
+  it('[Review 2 - #2] API hủy đơn cũ (/api/orders/:id/cancel) không bỏ qua VNPay đối với đơn đã thanh toán VNPay', async () => {
+    const { order, ingredient, promo } = await createOrderFixture(20, customerAToken);
+    const urlRes = await request(app.getHttpServer())
+      .post('/api/payments/vnpay/create-url')
+      .auth(customerAToken, { type: 'bearer' })
+      .send({ orderId: order.id })
+      .expect(201);
+    const txnRef = urlRes.body.txnRef as string;
+
+    await request(app.getHttpServer())
+      .get('/api/payments/vnpay/ipn')
+      .query(
+        buildSignedVnPayCallback({
+          vnp_Amount: String(order.total * 100),
+          vnp_BankCode: 'NCB',
+          vnp_OrderInfo: `Thanh toan don hang ${order.code}`,
+          vnp_PayDate: '20261028161000',
+          vnp_ResponseCode: '00',
+          vnp_TmnCode: TEST_TMN_CODE,
+          vnp_TransactionNo: '16100001',
+          vnp_TransactionStatus: '00',
+          vnp_TxnRef: txnRef,
+        }),
+      )
+      .expect(200);
+
+    // 1. Gọi POST /api/orders/:id/cancel khi cổng VNPay trả về phản hồi thiếu chữ ký -> bị chặn 502 VNPAY_REFUND_UNCERTAIN,
+    // KHÔNG tự hủy đơn, KHÔNG hoàn kho, KHÔNG đánh dấu REFUNDED, giữ trạng thái chờ đối soát
+    const fetchSpy = jest.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(JSON.stringify({ vnp_ResponseCode: '00' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    const cancelUncertain = await request(app.getHttpServer())
+      .post(`/api/orders/${order.id}/cancel`)
+      .auth(customerAToken, { type: 'bearer' })
+      .send({ expectedVersion: 1 })
+      .expect(502);
+    expect(cancelUncertain.body.code).toBe('VNPAY_REFUND_UNCERTAIN');
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    const orderStillPaid = await prisma.order.findUniqueOrThrow({ where: { id: order.id } });
+    expect(orderStillPaid.status).toBe('PAID');
+    expect(orderStillPaid.reservationStatus).toBe('CONSUMED');
+
+    const paymentStillSucceeded = await prisma.payment.findFirstOrThrow({
+      where: { orderId: order.id },
+    });
+    expect(paymentStillSucceeded.status).toBe('SUCCEEDED');
+
+    // Gọi lặp POST /api/orders/:id/cancel khi đang chờ đối soát -> bị chặn 409 REFUND_PENDING_RECONCILIATION, không gọi gateway thêm
+    const duplicateCancel = await request(app.getHttpServer())
+      .post(`/api/orders/${order.id}/cancel`)
+      .auth(customerAToken, { type: 'bearer' })
+      .send({ expectedVersion: 1 })
+      .expect(409);
+    expect(duplicateCancel.body.code).toBe('REFUND_PENDING_RECONCILIATION');
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    // 2. Đối soát qua QueryDR xác nhận chưa hoàn tiền -> mở khóa -> gọi lại POST /api/orders/:id/cancel với phản hồi VNPay hợp lệ có chữ ký
+    jest.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(
+        JSON.stringify(
+          buildSignedQueryDrGatewayResponse({
+            txnRef,
+            orderCode: order.code,
+            amount: order.total,
+            transactionType: '01',
+            transactionStatus: '00',
+          }),
+        ),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    await request(app.getHttpServer())
+      .post('/api/payments/vnpay/querydr')
+      .auth(customerAToken, { type: 'bearer' })
+      .send({ orderId: order.id })
+      .expect(200);
+
+    jest.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(
+        JSON.stringify(
+          buildSignedRefundGatewayResponse({
+            txnRef,
+            orderCode: order.code,
+            amount: order.total,
+            responseCode: '00',
+            transactionStatus: '00',
+          }),
+        ),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    const cancelOk = await request(app.getHttpServer())
+      .post(`/api/orders/${order.id}/cancel`)
+      .auth(customerAToken, { type: 'bearer' })
+      .send({ expectedVersion: 1 })
+      .expect(200);
+    expect(cancelOk.body.status).toBe('CANCELLED');
+    expect(cancelOk.body.reservationStatus).toBe('RELEASED');
+
+    const refundedPayment = await prisma.payment.findFirstOrThrow({ where: { orderId: order.id } });
+    expect(refundedPayment.status).toBe('REFUNDED');
+    const restoredIng = await prisma.ingredient.findUniqueOrThrow({ where: { id: ingredient.id } });
+    expect(restoredIng.stock).toBe(20);
+    const restoredPromo = await prisma.promotion.findUniqueOrThrow({ where: { id: promo.id } });
+    expect(restoredPromo.usedCount).toBe(0);
+  });
+
+  it('[Review 2 - #3] giữ trạng thái chờ đối soát khi VNPay trả mã 94, chặn gọi lặp (gateway không nhận thêm yêu cầu) và đối soát qua querydr', async () => {
+    const { order, ingredient } = await createOrderFixture(20, customerAToken);
+    const urlRes = await request(app.getHttpServer())
+      .post('/api/payments/vnpay/create-url')
+      .auth(customerAToken, { type: 'bearer' })
+      .send({ orderId: order.id })
+      .expect(201);
+    const txnRef = urlRes.body.txnRef as string;
+
+    await request(app.getHttpServer())
+      .get('/api/payments/vnpay/ipn')
+      .query(
+        buildSignedVnPayCallback({
+          vnp_Amount: String(order.total * 100),
+          vnp_BankCode: 'NCB',
+          vnp_OrderInfo: `Thanh toan don hang ${order.code}`,
+          vnp_PayDate: '20261028162000',
+          vnp_ResponseCode: '00',
+          vnp_TmnCode: TEST_TMN_CODE,
+          vnp_TransactionNo: '16200001',
+          vnp_TransactionStatus: '00',
+          vnp_TxnRef: txnRef,
+        }),
+      )
+      .expect(200);
+
+    // 1. Cổng VNPay trả về mã 94 (yêu cầu hoàn tiền trước đó đang được xử lý)
+    const fetchSpy = jest.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(
+        JSON.stringify(
+          buildSignedRefundGatewayResponse({
+            txnRef,
+            orderCode: order.code,
+            amount: order.total,
+            responseCode: '94',
+            transactionStatus: '94',
+            message: 'Duplicate refund request / processing',
+          }),
+        ),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    const res94 = await request(app.getHttpServer())
+      .post('/api/payments/vnpay/refund')
+      .auth(customerAToken, { type: 'bearer' })
+      .send({ orderId: order.id })
+      .expect(502);
+    expect(res94.body.code).toBe('VNPAY_REFUND_UNCERTAIN');
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    // 2. Lần gọi tiếp theo trên cả /api/payments/vnpay/refund lẫn /api/orders/:id/cancel đều bị chặn 409,
+    // và gateway (fetchSpy) KHÔNG nhận thêm bất kỳ yêu cầu hoàn tiền nào
+    const secondRefund = await request(app.getHttpServer())
+      .post('/api/payments/vnpay/refund')
+      .auth(customerAToken, { type: 'bearer' })
+      .send({ orderId: order.id })
+      .expect(409);
+    expect(secondRefund.body.code).toBe('REFUND_PENDING_RECONCILIATION');
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    const cancelWhile94 = await request(app.getHttpServer())
+      .post(`/api/orders/${order.id}/cancel`)
+      .auth(customerAToken, { type: 'bearer' })
+      .send({ expectedVersion: 1 })
+      .expect(409);
+    expect(cancelWhile94.body.code).toBe('REFUND_PENDING_RECONCILIATION');
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    // 3. Đối soát qua POST /api/payments/vnpay/querydr: cổng VNPay xác nhận yêu cầu hoàn tiền trước đó đã hoàn tất (vnp_TransactionType = '02', vnp_TransactionStatus = '00')
+    jest.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(
+        JSON.stringify(
+          buildSignedQueryDrGatewayResponse({
+            txnRef,
+            orderCode: order.code,
+            amount: order.total,
+            transactionType: '02',
+            transactionStatus: '00',
+            message: 'Refund confirmed via QueryDR',
+          }),
+        ),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    const reconcileRes = await request(app.getHttpServer())
+      .post('/api/payments/vnpay/querydr')
+      .auth(customerAToken, { type: 'bearer' })
+      .send({ orderId: order.id })
+      .expect(200);
+
+    expect(reconcileRes.body.transaction.orderStatus).toBe('CANCELLED');
+    expect(reconcileRes.body.transaction.paymentStatus).toBe('REFUNDED');
+    expect(reconcileRes.body.transaction.refundStatus).toBe('REFUNDED');
+
+    const reconciledOrder = await prisma.order.findUniqueOrThrow({ where: { id: order.id } });
+    expect(reconciledOrder.status).toBe('CANCELLED');
+    expect(reconciledOrder.reservationStatus).toBe('RELEASED');
+
+    const restoredStock = await prisma.ingredient.findUniqueOrThrow({
+      where: { id: ingredient.id },
+    });
+    expect(restoredStock.stock).toBe(20);
   });
 });
