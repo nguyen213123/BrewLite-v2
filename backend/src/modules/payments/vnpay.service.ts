@@ -79,6 +79,22 @@ export function sortAndEncode(obj: Record<string, string>): { signData: string; 
   return { signData, queryString: signData };
 }
 
+/**
+ * Các mã vnp_TransactionStatus cho biết giao dịch hoàn tiền đang được VNPay / ngân hàng xử lý hoặc chưa rõ kết quả cuối:
+ * - '01': Giao dịch chưa hoàn tất / đang xử lý
+ * - '05': VNPay đang xử lý giao dịch hoàn tiền
+ * - '06': VNPay đã gửi yêu cầu hoàn tiền sang ngân hàng
+ * - '08': Giao dịch quá thời gian chờ / đang chờ xử lý
+ * - '94': Yêu cầu hoàn tiền trước đó đang được xử lý (trùng lặp)
+ * - '99': Trạng thái chưa xác định
+ */
+export const VNPAY_REFUND_PROCESSING_STATUSES = ['01', '05', '06', '08', '94', '99'] as const;
+
+export function isVnPayRefundProcessingStatus(status?: string | null): boolean {
+  if (!status) return true;
+  return (VNPAY_REFUND_PROCESSING_STATUSES as readonly string[]).includes(status.trim());
+}
+
 export function computeVnPayQueryDrResponseHash(
   json: Record<string, string | undefined>,
   hashSecret: string,
@@ -612,18 +628,16 @@ export class VnPayService {
     // 3. Chỉ xác nhận hoàn tiền thành công khi cả vnp_ResponseCode === '00' VÀ vnp_TransactionStatus === '00'
     const isConfirmedSuccess = responseCode === '00' && transactionStatus === '00';
 
-    // Mã 94 (yêu cầu hoàn tiền trước đó đang được xử lý), 99, 08 hoặc responseCode = '00' nhưng thiếu/sai transactionStatus
+    // Mã 05 (VNPay đang xử lý hoàn tiền), 06 (VNPay đã gửi hoàn tiền sang ngân hàng),
+    // 94 (yêu cầu hoàn tiền trước đó đang được xử lý), 01, 08, 99 hoặc responseCode = '00' nhưng thiếu/sai transactionStatus
     // đều được giữ ở trạng thái chờ đối soát (UNCERTAIN -> PENDING_RECONCILIATION), không mở khóa và không gửi hoàn tiền lặp
     const isUncertain =
       !isConfirmedSuccess &&
       (responseCode === '00' ||
-        responseCode === '94' ||
-        responseCode === '99' ||
-        responseCode === '08' ||
-        transactionStatus === '94' ||
-        transactionStatus === '01' ||
-        transactionStatus === '99' ||
-        responseCode.length === 0);
+        ['05', '06', '08', '94', '99'].includes(responseCode) ||
+        isVnPayRefundProcessingStatus(transactionStatus) ||
+        responseCode.length === 0 ||
+        transactionStatus.length === 0);
 
     return {
       outcome: isConfirmedSuccess ? 'SUCCEEDED' : isUncertain ? 'UNCERTAIN' : 'REJECTED',

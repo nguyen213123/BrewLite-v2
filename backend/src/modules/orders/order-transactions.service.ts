@@ -42,6 +42,32 @@ export class OrderTransactionsService implements OrderTransactionsPort {
     if (order.version !== expectedVersion) throw versionConflict();
     assertTransition(order.status, toStatus);
 
+    if (order.status === 'PAID' && toStatus !== 'CANCELLED') {
+      const paymentRepo = tx.payment as unknown as {
+        findMany?: (args: {
+          where: { orderId: string };
+          include: { idempotency: true };
+        }) => Promise<Array<{ idempotency?: { httpStatus?: number | null; response?: unknown } | null }>>;
+      };
+      if (typeof paymentRepo?.findMany === 'function') {
+        const payments = await paymentRepo.findMany({
+          where: { orderId },
+          include: { idempotency: true },
+        });
+        const hasPendingRefund = payments.some((p) => {
+          const meta = (p.idempotency?.response ?? {}) as Record<string, unknown>;
+          return p.idempotency?.httpStatus === 201 || meta.refundStatus === 'PENDING_RECONCILIATION';
+        });
+        if (hasPendingRefund) {
+          throw new ApiError(
+            409,
+            'REFUND_PENDING_RECONCILIATION',
+            'Đơn hàng đang có yêu cầu hoàn tiền VNPay đang xử lý hoặc chờ đối soát, không thể chuyển trạng thái pha chế trước khi đối soát xong',
+          );
+        }
+      }
+    }
+
     const changed = await tx.order.updateMany({
       where: { id: orderId, version: expectedVersion, status: order.status },
       data: {

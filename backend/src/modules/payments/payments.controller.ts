@@ -29,7 +29,11 @@ import {
   VnPayActionDto,
   VnPayQueryDto,
 } from './dto/payment.dto';
-import { VnPayService, type VnPayVerifyResult } from './vnpay.service';
+import {
+  VnPayService,
+  isVnPayRefundProcessingStatus,
+  type VnPayVerifyResult,
+} from './vnpay.service';
 
 @Controller('payments')
 export class PaymentsController {
@@ -323,8 +327,10 @@ export class PaymentsController {
         orderId: p.orderId,
         orderCode: p.order.code,
         orderStatus: p.order.status,
+        reservationStatus: p.order.reservationStatus,
         paymentStatus: p.status,
         refundStatus,
+        requiresManualReview: Boolean(meta.requiresManualReview),
         amount: p.amount,
         transactionNo,
         txnRef,
@@ -372,45 +378,54 @@ export class PaymentsController {
     });
 
     let currentOrderStatus = target.order.status;
+    let currentReservationStatus = target.order.reservationStatus;
     let currentPaymentStatus = target.payment.status;
     let currentRefundStatus =
       typeof target.meta.refundStatus === 'string' ? target.meta.refundStatus : undefined;
+    let requiresManualReview = Boolean(target.meta.requiresManualReview);
     let message = 'Đối soát thành công: Cổng VNPay xác nhận giao dịch hợp lệ (vnp_ResponseCode = 00)';
 
-    // Nếu giao dịch đang ở trạng thái chờ đối soát hoàn tiền (PENDING_RECONCILIATION),
-    // cập nhật trạng thái theo kết quả đối soát đã xác minh chữ ký từ cổng VNPay:
-    if (target.meta.refundStatus === 'PENDING_RECONCILIATION') {
-      const isRefundConfirmedByGateway =
-        gatewayResult.vnp_TransactionType === '02' &&
-        gatewayResult.vnp_TransactionStatus === '00';
-      const isDefinitivelyNotRefunded =
-        (gatewayResult.vnp_TransactionType === '01' &&
-          gatewayResult.vnp_TransactionStatus === '00') ||
-        (gatewayResult.vnp_TransactionType === '02' &&
-          ['02', '07', '09'].includes(gatewayResult.vnp_TransactionStatus));
+    const isPendingRefundReconciliation =
+      target.meta.refundStatus === 'PENDING_RECONCILIATION' ||
+      target.payment.idempotency?.httpStatus === 201;
 
-      if (isRefundConfirmedByGateway) {
-        await this.prisma.$transaction(async (tx) => {
-          const currentOrder = await tx.order.findUnique({
-            where: { id: target.order.id },
-            include: { items: { include: { toppings: true } } },
+    const isRefundConfirmedByGateway =
+      gatewayResult.vnp_TransactionType === '02' &&
+      gatewayResult.vnp_TransactionStatus === '00';
+
+    const isRefundProcessingAtGateway =
+      (isPendingRefundReconciliation || gatewayResult.vnp_TransactionType === '02') &&
+      isVnPayRefundProcessingStatus(gatewayResult.vnp_TransactionStatus);
+
+    const isDefinitivelyNotRefunded =
+      (gatewayResult.vnp_TransactionType === '01' &&
+        gatewayResult.vnp_TransactionStatus === '00') ||
+      (gatewayResult.vnp_TransactionType === '02' &&
+        ['02', '07', '09'].includes(gatewayResult.vnp_TransactionStatus));
+
+    if (isRefundConfirmedByGateway) {
+      const reconciled = await this.prisma.$transaction(async (tx) => {
+        const currentOrder = await tx.order.findUnique({
+          where: { id: target.order.id },
+          include: { items: { include: { toppings: true } } },
+        });
+
+        if (!currentOrder) {
+          throw new ApiError(404, 'ORDER_NOT_FOUND', 'Đơn hàng không tồn tại');
+        }
+
+        if (currentOrder.status === 'PAID') {
+          const cancelledOrder = await this.orderTransactions.transition(tx, {
+            orderId: currentOrder.id,
+            actorUserId: user.id,
+            expectedVersion: currentOrder.version,
+            toStatus: 'CANCELLED',
           });
-
-          if (currentOrder && currentOrder.status === 'PAID') {
-            await this.orderTransactions.transition(tx, {
-              orderId: currentOrder.id,
-              actorUserId: user.id,
-              expectedVersion: currentOrder.version,
-              toStatus: 'CANCELLED',
-            });
-            await this.loyaltyTransactions.reverse(tx, currentOrder);
-          }
-
+          await this.loyaltyTransactions.reverse(tx, currentOrder);
           await tx.payment.update({
             where: { id: target.payment.id },
             data: { status: 'REFUNDED' },
           });
-
           await tx.idempotencyRecord.update({
             where: { id: target.payment.idempotencyRecordId },
             data: {
@@ -419,40 +434,135 @@ export class PaymentsController {
               response: {
                 ...target.meta,
                 refundStatus: 'REFUNDED',
+                requiresManualReview: false,
                 refundTransactionNo: gatewayResult.vnp_TransactionNo,
                 refundResponseCode: gatewayResult.vnp_ResponseCode,
               },
             },
           });
-        });
 
-        currentOrderStatus = 'CANCELLED';
-        currentPaymentStatus = 'REFUNDED';
-        currentRefundStatus = 'REFUNDED';
-        message =
-          'Đối soát thành công: Cổng VNPay xác nhận yêu cầu hoàn tiền trước đó đã hoàn tất, đã đồng bộ hủy đơn và hoàn kho';
-      } else if (isDefinitivelyNotRefunded) {
-        // Cổng VNPay xác nhận rõ ràng giao dịch chưa hoàn tiền và không có lệnh hoàn tiền đang xử lý -> mở khóa để cho phép thao tác tiếp
-        await this.prisma.idempotencyRecord.update({
+          return {
+            orderStatus: cancelledOrder.status,
+            reservationStatus: cancelledOrder.reservationStatus,
+            paymentStatus: 'REFUNDED' as const,
+            refundStatus: 'REFUNDED' as const,
+            requiresManualReview: false,
+            message:
+              'Đối soát thành công: Cổng VNPay xác nhận yêu cầu hoàn tiền trước đó đã hoàn tất, đã đồng bộ hủy đơn và hoàn kho',
+          };
+        }
+
+        if (currentOrder.status === 'CANCELLED') {
+          if (target.payment.status !== 'REFUNDED') {
+            await tx.payment.update({
+              where: { id: target.payment.id },
+              data: { status: 'REFUNDED' },
+            });
+          }
+          await tx.idempotencyRecord.update({
+            where: { id: target.payment.idempotencyRecordId },
+            data: {
+              status: 'COMPLETED',
+              httpStatus: 200,
+              response: {
+                ...target.meta,
+                refundStatus: 'REFUNDED',
+                requiresManualReview: false,
+                refundTransactionNo: gatewayResult.vnp_TransactionNo,
+                refundResponseCode: gatewayResult.vnp_ResponseCode,
+              },
+            },
+          });
+
+          return {
+            orderStatus: currentOrder.status,
+            reservationStatus: currentOrder.reservationStatus,
+            paymentStatus: 'REFUNDED' as const,
+            refundStatus: 'REFUNDED' as const,
+            requiresManualReview: false,
+            message:
+              'Đối soát thành công: Cổng VNPay xác nhận yêu cầu hoàn tiền đã hoàn tất, đơn hàng đã ở trạng thái CANCELLED và hoàn kho',
+          };
+        }
+
+        // Ngoại lệ hoàn tiền xác nhận muộn khi đơn đã chuyển sang PREPARING / READY / COMPLETED:
+        // Không cưỡng ép hủy đơn đang pha chế trái quy tắc; ghi nhận thanh toán REFUNDED,
+        // đảo điểm thưởng (nếu có), đánh dấu ngoại lệ cần nhân viên xử lý và trả đúng trạng thái thực tế trong DB.
+        await tx.payment.update({
+          where: { id: target.payment.id },
+          data: { status: 'REFUNDED' },
+        });
+        await this.loyaltyTransactions.reverse(tx, currentOrder);
+        await tx.idempotencyRecord.update({
           where: { id: target.payment.idempotencyRecordId },
           data: {
             status: 'COMPLETED',
             httpStatus: 200,
             response: {
               ...target.meta,
-              refundStatus: 'RECONCILED_NOT_REFUNDED',
-              lastQueryTransactionType: gatewayResult.vnp_TransactionType,
-              lastQueryTransactionStatus: gatewayResult.vnp_TransactionStatus,
+              refundStatus: 'REFUNDED_LATE_MANUAL_REVIEW',
+              requiresManualReview: true,
+              lateRefundOrderStatus: currentOrder.status,
+              refundTransactionNo: gatewayResult.vnp_TransactionNo,
+              refundResponseCode: gatewayResult.vnp_ResponseCode,
             },
           },
         });
-        currentRefundStatus = 'RECONCILED_NOT_REFUNDED';
-        message =
-          'Đối soát thành công: Cổng VNPay xác nhận giao dịch chưa hoàn tiền, đã mở khóa để cho phép thao tác tiếp';
-      } else {
-        message =
-          'Đối soát thành công: Yêu cầu hoàn tiền vẫn đang được cổng VNPay xử lý, tiếp tục giữ trạng thái chờ đối soát';
-      }
+
+        return {
+          orderStatus: currentOrder.status,
+          reservationStatus: currentOrder.reservationStatus,
+          paymentStatus: 'REFUNDED' as const,
+          refundStatus: 'REFUNDED_LATE_MANUAL_REVIEW' as const,
+          requiresManualReview: true,
+          message: `Đối soát ghi nhận cổng VNPay đã hoàn tiền (REFUNDED), nhưng đơn hàng đang ở trạng thái ${currentOrder.status} (kho: ${currentOrder.reservationStatus}) nên không tự động hủy đơn hay hoàn kho. Yêu cầu nhân viên xử lý ngoại lệ.`,
+        };
+      });
+
+      currentOrderStatus = reconciled.orderStatus;
+      currentReservationStatus = reconciled.reservationStatus;
+      currentPaymentStatus = reconciled.paymentStatus;
+      currentRefundStatus = reconciled.refundStatus;
+      requiresManualReview = reconciled.requiresManualReview;
+      message = reconciled.message;
+    } else if (isRefundProcessingAtGateway) {
+      // Các mã 01, 05 (VNPay đang xử lý hoàn tiền), 06 (VNPay đã gửi hoàn tiền sang ngân hàng), 08, 94, 99:
+      // Giữ khóa (httpStatus = 201) và trạng thái PENDING_RECONCILIATION, không mở khóa
+      await this.prisma.idempotencyRecord.update({
+        where: { id: target.payment.idempotencyRecordId },
+        data: {
+          status: 'COMPLETED',
+          httpStatus: 201,
+          response: {
+            ...target.meta,
+            refundStatus: 'PENDING_RECONCILIATION',
+            lastQueryTransactionType: gatewayResult.vnp_TransactionType,
+            lastQueryTransactionStatus: gatewayResult.vnp_TransactionStatus,
+          },
+        },
+      });
+      currentRefundStatus = 'PENDING_RECONCILIATION';
+      requiresManualReview = false;
+      message = `Đối soát thành công: Yêu cầu hoàn tiền vẫn đang được cổng VNPay / ngân hàng xử lý (vnp_TransactionStatus = ${gatewayResult.vnp_TransactionStatus}), tiếp tục giữ trạng thái chờ đối soát`;
+    } else if (isPendingRefundReconciliation && isDefinitivelyNotRefunded) {
+      // Cổng VNPay xác nhận rõ ràng giao dịch chưa hoàn tiền và không có lệnh hoàn tiền đang xử lý -> mở khóa để cho phép thao tác tiếp
+      await this.prisma.idempotencyRecord.update({
+        where: { id: target.payment.idempotencyRecordId },
+        data: {
+          status: 'COMPLETED',
+          httpStatus: 200,
+          response: {
+            ...target.meta,
+            refundStatus: 'RECONCILED_NOT_REFUNDED',
+            lastQueryTransactionType: gatewayResult.vnp_TransactionType,
+            lastQueryTransactionStatus: gatewayResult.vnp_TransactionStatus,
+          },
+        },
+      });
+      currentRefundStatus = 'RECONCILED_NOT_REFUNDED';
+      requiresManualReview = false;
+      message =
+        'Đối soát thành công: Cổng VNPay xác nhận giao dịch chưa hoàn tiền, đã mở khóa để cho phép thao tác tiếp';
     }
 
     return {
@@ -463,8 +573,10 @@ export class PaymentsController {
         orderId: target.order.id,
         orderCode: target.order.code,
         orderStatus: currentOrderStatus,
+        reservationStatus: currentReservationStatus,
         paymentStatus: currentPaymentStatus,
         refundStatus: currentRefundStatus,
+        requiresManualReview,
         amount: target.payment.amount,
         transactionNo: target.transactionNo,
         txnRef: target.txnRef,
@@ -495,7 +607,10 @@ export class PaymentsController {
       throw new ApiError(404, 'PAYMENT_NOT_FOUND', 'Không tìm thấy giao dịch VNPay để hoàn tiền');
     }
 
-    if (target.meta.refundStatus === 'PENDING_RECONCILIATION') {
+    if (
+      target.meta.refundStatus === 'PENDING_RECONCILIATION' ||
+      target.payment.idempotency?.httpStatus === 201
+    ) {
       throw new ApiError(
         409,
         'REFUND_PENDING_RECONCILIATION',
@@ -523,26 +638,51 @@ export class PaymentsController {
       );
     }
 
-    // Khóa nguyên tử (atomic lock) trên IdempotencyRecord (httpStatus 200 -> 201) để chặn các yêu cầu hoàn tiền đồng thời
-    // đồng thời tuân thủ ràng buộc CHECK IdempotencyRecord_completion (status = 'COMPLETED' AND httpStatus IN (200, 201))
-    const lock = await this.prisma.idempotencyRecord.updateMany({
-      where: {
-        id: target.payment.idempotencyRecordId,
-        status: 'COMPLETED',
-        httpStatus: 200,
-      },
-      data: {
-        httpStatus: 201,
-      },
-    });
+    // Khóa nguyên tử (atomic lock) trên IdempotencyRecord (httpStatus 200 -> 201) và kiểm tra trạng thái đơn PAID trong cùng transaction
+    // trước khi gọi cổng VNPay để chống gửi hoàn tiền trùng hoặc xung đột với thao tác chuyển trạng thái pha chế của STAFF
+    await this.prisma.$transaction(async (tx) => {
+      const freshOrder = await tx.order.findUnique({
+        where: { id: target.order.id },
+      });
+      if (!freshOrder || freshOrder.status !== 'PAID') {
+        throw new ApiError(
+          409,
+          'ORDER_NOT_REFUNDABLE',
+          `Chỉ có thể hoàn tiền và hủy đơn khi đơn hàng ở trạng thái PAID (hiện tại: ${freshOrder?.status ?? 'UNKNOWN'})`,
+        );
+      }
 
-    if (lock.count !== 1) {
-      throw new ApiError(
-        409,
-        'REFUND_IN_PROGRESS',
-        'Giao dịch đang trong quá trình xử lý hoàn tiền hoặc chờ đối soát, không gửi hoàn tiền trùng lặp',
-      );
-    }
+      const lock = await tx.idempotencyRecord.updateMany({
+        where: {
+          id: target.payment.idempotencyRecordId,
+          status: 'COMPLETED',
+          httpStatus: 200,
+        },
+        data: {
+          httpStatus: 201,
+        },
+      });
+
+      if (lock.count !== 1) {
+        throw new ApiError(
+          409,
+          'REFUND_IN_PROGRESS',
+          'Giao dịch đang trong quá trình xử lý hoàn tiền hoặc chờ đối soát, không gửi hoàn tiền trùng lặp',
+        );
+      }
+
+      await tx.idempotencyRecord.update({
+        where: { id: target.payment.idempotencyRecordId },
+        data: {
+          status: 'COMPLETED',
+          httpStatus: 201,
+          response: {
+            ...target.meta,
+            refundStatus: 'PENDING_RECONCILIATION',
+          },
+        },
+      });
+    });
 
     const ipAddr =
       (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
@@ -605,29 +745,101 @@ export class PaymentsController {
       );
     }
 
-    // Chỉ khi VNPay xác nhận thành công (outcome === 'SUCCEEDED' / vnp_ResponseCode === '00')
+    // Chỉ khi VNPay xác nhận thành công (outcome === 'SUCCEEDED' / vnp_ResponseCode === '00' && vnp_TransactionStatus === '00')
+    let reconciled: {
+      orderStatus: string;
+      reservationStatus: string;
+      paymentStatus: 'REFUNDED';
+      refundStatus: 'REFUNDED' | 'REFUNDED_LATE_MANUAL_REVIEW';
+      requiresManualReview: boolean;
+      message: string;
+    };
+
     try {
-      await this.prisma.$transaction(async (tx) => {
+      reconciled = await this.prisma.$transaction(async (tx) => {
         const currentOrder = await tx.order.findUnique({
           where: { id: target.order.id },
           include: { items: { include: { toppings: true } } },
         });
 
-        if (!currentOrder || currentOrder.status !== 'PAID') {
-          throw new ApiError(
-            409,
-            'ORDER_NOT_REFUNDABLE',
-            'Trạng thái đơn hàng đã thay đổi, không thể hoàn tất hủy đơn',
-          );
+        if (!currentOrder) {
+          throw new ApiError(404, 'ORDER_NOT_FOUND', 'Đơn hàng không tồn tại');
         }
 
-        await this.orderTransactions.transition(tx, {
-          orderId: currentOrder.id,
-          actorUserId: user.id,
-          expectedVersion: currentOrder.version,
-          toStatus: 'CANCELLED',
-        });
+        if (currentOrder.status === 'PAID') {
+          const cancelledOrder = await this.orderTransactions.transition(tx, {
+            orderId: currentOrder.id,
+            actorUserId: user.id,
+            expectedVersion: currentOrder.version,
+            toStatus: 'CANCELLED',
+          });
 
+          await tx.payment.update({
+            where: { id: target.payment.id },
+            data: { status: 'REFUNDED' },
+          });
+
+          await this.loyaltyTransactions.reverse(tx, currentOrder);
+
+          await tx.idempotencyRecord.update({
+            where: { id: target.payment.idempotencyRecordId },
+            data: {
+              status: 'COMPLETED',
+              httpStatus: 200,
+              response: {
+                ...target.meta,
+                refundStatus: 'REFUNDED',
+                requiresManualReview: false,
+                refundTransactionNo: gatewayResult.vnp_TransactionNo,
+                refundResponseCode: gatewayResult.vnp_ResponseCode,
+              },
+            },
+          });
+
+          return {
+            orderStatus: cancelledOrder.status,
+            reservationStatus: cancelledOrder.reservationStatus,
+            paymentStatus: 'REFUNDED' as const,
+            refundStatus: 'REFUNDED' as const,
+            requiresManualReview: false,
+            message: `Hoàn tiền VNPay thành công 100% (${target.payment.amount.toLocaleString('vi-VN')} ₫) cho đơn ${target.order.code}`,
+          };
+        }
+
+        if (currentOrder.status === 'CANCELLED') {
+          await tx.payment.update({
+            where: { id: target.payment.id },
+            data: { status: 'REFUNDED' },
+          });
+
+          await tx.idempotencyRecord.update({
+            where: { id: target.payment.idempotencyRecordId },
+            data: {
+              status: 'COMPLETED',
+              httpStatus: 200,
+              response: {
+                ...target.meta,
+                refundStatus: 'REFUNDED',
+                requiresManualReview: false,
+                refundTransactionNo: gatewayResult.vnp_TransactionNo,
+                refundResponseCode: gatewayResult.vnp_ResponseCode,
+              },
+            },
+          });
+
+          return {
+            orderStatus: currentOrder.status,
+            reservationStatus: currentOrder.reservationStatus,
+            paymentStatus: 'REFUNDED' as const,
+            refundStatus: 'REFUNDED' as const,
+            requiresManualReview: false,
+            message: `Hoàn tiền VNPay thành công 100% (${target.payment.amount.toLocaleString('vi-VN')} ₫) cho đơn ${target.order.code}`,
+          };
+        }
+
+        // Ngoại lệ hoàn tiền xác nhận muộn khi đơn đã ở PREPARING / READY / COMPLETED:
+        // Không cưỡng ép hủy đơn đang pha chế trái quy tắc; cập nhật thanh toán REFUNDED,
+        // đảo điểm thưởng (nếu có), ghi nhận ngoại lệ cần nhân viên xử lý và trả đúng trạng thái thực tế trong DB.
         await tx.payment.update({
           where: { id: target.payment.id },
           data: { status: 'REFUNDED' },
@@ -642,12 +854,23 @@ export class PaymentsController {
             httpStatus: 200,
             response: {
               ...target.meta,
-              refundStatus: 'REFUNDED',
+              refundStatus: 'REFUNDED_LATE_MANUAL_REVIEW',
+              requiresManualReview: true,
+              lateRefundOrderStatus: currentOrder.status,
               refundTransactionNo: gatewayResult.vnp_TransactionNo,
               refundResponseCode: gatewayResult.vnp_ResponseCode,
             },
           },
         });
+
+        return {
+          orderStatus: currentOrder.status,
+          reservationStatus: currentOrder.reservationStatus,
+          paymentStatus: 'REFUNDED' as const,
+          refundStatus: 'REFUNDED_LATE_MANUAL_REVIEW' as const,
+          requiresManualReview: true,
+          message: `Cổng VNPay đã hoàn tiền (REFUNDED), nhưng đơn hàng đang ở trạng thái ${currentOrder.status} (kho: ${currentOrder.reservationStatus}) nên không tự động hủy đơn hay hoàn kho. Yêu cầu nhân viên xử lý ngoại lệ.`,
+        };
       });
     } catch (error) {
       // Nếu lỗi nội bộ khi cập nhật DB sau khi VNPay đã hoàn tiền, giữ dấu vết đối soát
@@ -665,20 +888,18 @@ export class PaymentsController {
       throw error;
     }
 
-    const updatedPayment = await this.prisma.payment.findUnique({
-      where: { id: target.payment.id },
-      include: { order: true },
-    });
-
     return {
       success: true,
-      message: `Hoàn tiền VNPay thành công 100% (${target.payment.amount.toLocaleString('vi-VN')} ₫) cho đơn ${target.order.code}`,
+      message: reconciled.message,
       transaction: {
         paymentId: target.payment.id,
         orderId: target.order.id,
         orderCode: target.order.code,
-        orderStatus: updatedPayment?.order.status ?? 'CANCELLED',
-        paymentStatus: updatedPayment?.status ?? 'REFUNDED',
+        orderStatus: reconciled.orderStatus,
+        reservationStatus: reconciled.reservationStatus,
+        paymentStatus: reconciled.paymentStatus,
+        refundStatus: reconciled.refundStatus,
+        requiresManualReview: reconciled.requiresManualReview,
         amount: target.payment.amount,
         transactionNo: target.transactionNo,
         txnRef: target.txnRef,

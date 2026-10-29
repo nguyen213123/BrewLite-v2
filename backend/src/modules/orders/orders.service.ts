@@ -130,41 +130,70 @@ export class OrdersService implements OrdersPort {
           throw new ApiError(409, 'ORDER_VERSION_CONFLICT', 'Đơn hàng đã thay đổi, vui lòng tải lại');
         }
 
+        if (
+          vnpayMeta.refundStatus === 'PENDING_RECONCILIATION' ||
+          vnpayPayment.idempotency?.httpStatus === 201
+        ) {
+          throw new ApiError(
+            409,
+            'REFUND_PENDING_RECONCILIATION',
+            'Yêu cầu hoàn tiền VNPay trước đó chưa rõ kết quả và đang chờ đối soát. Không gửi hoàn tiền lặp.',
+          );
+        }
+
         if (existingOrder.status === 'PAID') {
           if (existingOrder.version !== expectedVersion) {
             throw new ApiError(409, 'ORDER_VERSION_CONFLICT', 'Đơn hàng đã thay đổi, vui lòng tải lại');
-          }
-
-          if (vnpayMeta.refundStatus === 'PENDING_RECONCILIATION') {
-            throw new ApiError(
-              409,
-              'REFUND_PENDING_RECONCILIATION',
-              'Yêu cầu hoàn tiền VNPay trước đó chưa rõ kết quả và đang chờ đối soát. Không gửi hoàn tiền lặp.',
-            );
           }
 
           if (vnpayPayment.status === 'REFUNDED') {
             throw new ApiError(409, 'PAYMENT_ALREADY_REFUNDED', 'Giao dịch này đã được hoàn tiền trước đó');
           }
 
-          const lock = await this.prisma.idempotencyRecord.updateMany({
-            where: {
-              id: vnpayPayment.idempotencyRecordId,
-              status: 'COMPLETED',
-              httpStatus: 200,
-            },
-            data: {
-              httpStatus: 201,
-            },
-          });
+          await this.unitOfWork.run(async (tx) => {
+            const current = await this.transitions.loadOwned(tx, userId, orderId);
+            if (current.version !== expectedVersion) {
+              throw new ApiError(409, 'ORDER_VERSION_CONFLICT', 'Đơn hàng đã thay đổi, vui lòng tải lại');
+            }
+            if (current.status !== 'PAID') {
+              throw new ApiError(
+                409,
+                'INVALID_ORDER_TRANSITION',
+                `Không thể hủy và hoàn tiền đơn hàng đang ở trạng thái ${current.status}`,
+              );
+            }
 
-          if (lock.count !== 1) {
-            throw new ApiError(
-              409,
-              'REFUND_IN_PROGRESS',
-              'Giao dịch đang trong quá trình xử lý hoàn tiền hoặc chờ đối soát, không gửi hoàn tiền trùng lặp',
-            );
-          }
+            const lock = await this.prisma!.idempotencyRecord.updateMany({
+              where: {
+                id: vnpayPayment.idempotencyRecordId,
+                status: 'COMPLETED',
+                httpStatus: 200,
+              },
+              data: {
+                httpStatus: 201,
+              },
+            });
+
+            if (lock.count !== 1) {
+              throw new ApiError(
+                409,
+                'REFUND_IN_PROGRESS',
+                'Giao dịch đang trong quá trình xử lý hoàn tiền hoặc chờ đối soát, không gửi hoàn tiền trùng lặp',
+              );
+            }
+
+            await this.prisma!.idempotencyRecord.update({
+              where: { id: vnpayPayment.idempotencyRecordId },
+              data: {
+                status: 'COMPLETED',
+                httpStatus: 201,
+                response: {
+                  ...vnpayMeta,
+                  refundStatus: 'PENDING_RECONCILIATION',
+                },
+              },
+            });
+          });
 
           const txnRef =
             typeof vnpayMeta.txnRef === 'string' && vnpayMeta.txnRef.length > 0
@@ -236,12 +265,60 @@ export class OrdersService implements OrdersPort {
           try {
             return await this.unitOfWork.run(async (tx) => {
               const order = await this.transitions.loadOwned(tx, userId, orderId);
-              const cancelled = await this.transitions.transition(tx, {
-                orderId,
-                actorUserId: userId,
-                expectedVersion,
-                toStatus: 'CANCELLED',
-              });
+              if (order.status === 'PAID') {
+                const cancelled = await this.transitions.transition(tx, {
+                  orderId,
+                  actorUserId: userId,
+                  expectedVersion: order.version,
+                  toStatus: 'CANCELLED',
+                });
+                await tx.payment.update({
+                  where: { id: vnpayPayment.id },
+                  data: { status: 'REFUNDED' },
+                });
+                await this.loyalty.reverse(tx, order);
+                await tx.idempotencyRecord.update({
+                  where: { id: vnpayPayment.idempotencyRecordId },
+                  data: {
+                    status: 'COMPLETED',
+                    httpStatus: 200,
+                    response: {
+                      ...vnpayMeta,
+                      refundStatus: 'REFUNDED',
+                      requiresManualReview: false,
+                      refundTransactionNo: gatewayResult.vnp_TransactionNo,
+                      refundResponseCode: gatewayResult.vnp_ResponseCode,
+                    },
+                  },
+                });
+                return toApiOrder(cancelled);
+              }
+
+              if (order.status === 'CANCELLED') {
+                await tx.payment.update({
+                  where: { id: vnpayPayment.id },
+                  data: { status: 'REFUNDED' },
+                });
+                await tx.idempotencyRecord.update({
+                  where: { id: vnpayPayment.idempotencyRecordId },
+                  data: {
+                    status: 'COMPLETED',
+                    httpStatus: 200,
+                    response: {
+                      ...vnpayMeta,
+                      refundStatus: 'REFUNDED',
+                      requiresManualReview: false,
+                      refundTransactionNo: gatewayResult.vnp_TransactionNo,
+                      refundResponseCode: gatewayResult.vnp_ResponseCode,
+                    },
+                  },
+                });
+                return toApiOrder(order);
+              }
+
+              // Xác nhận hoàn tiền đến muộn khi đơn đã chuyển sang PREPARING / READY / COMPLETED:
+              // Không cưỡng ép hủy đơn đang pha chế trái quy tắc; ghi nhận thanh toán REFUNDED,
+              // đảo điểm thưởng (nếu có), đánh dấu ngoại lệ cần nhân viên xử lý và trả đúng trạng thái thực tế của đơn.
               await tx.payment.update({
                 where: { id: vnpayPayment.id },
                 data: { status: 'REFUNDED' },
@@ -254,13 +331,15 @@ export class OrdersService implements OrdersPort {
                   httpStatus: 200,
                   response: {
                     ...vnpayMeta,
-                    refundStatus: 'REFUNDED',
+                    refundStatus: 'REFUNDED_LATE_MANUAL_REVIEW',
+                    requiresManualReview: true,
+                    lateRefundOrderStatus: order.status,
                     refundTransactionNo: gatewayResult.vnp_TransactionNo,
                     refundResponseCode: gatewayResult.vnp_ResponseCode,
                   },
                 },
               });
-              return toApiOrder(cancelled);
+              return toApiOrder(order);
             });
           } catch (error) {
             await this.prisma.idempotencyRecord.update({
@@ -298,6 +377,7 @@ export class OrdersService implements OrdersPort {
     if (!STAFF_STATUSES.includes(input.status)) {
       throw new ApiError(409, 'INVALID_ORDER_TRANSITION', `Không thể chuyển sang ${input.status} bằng endpoint này`);
     }
+    let hasRefundedPayment = false;
     if (this.prisma) {
       const existingOrder = await this.prisma.order.findUnique({
         where: { id: orderId },
@@ -314,6 +394,9 @@ export class OrdersService implements OrdersPort {
           'Đơn hàng đang có yêu cầu hoàn tiền VNPay chờ đối soát, không thể chuyển trạng thái pha chế trước khi đối soát xong',
         );
       }
+      hasRefundedPayment = Boolean(
+        existingOrder?.payments.some((p) => p.status === 'REFUNDED'),
+      );
     }
     return this.unitOfWork.run(async tx => {
       const updated = await this.transitions.transition(tx, {
@@ -322,7 +405,7 @@ export class OrdersService implements OrdersPort {
         expectedVersion: input.expectedVersion,
         toStatus: input.status,
       });
-      if (input.status === 'COMPLETED') {
+      if (input.status === 'COMPLETED' && !hasRefundedPayment) {
         await this.loyalty.earn(tx, updated);
       }
       return toApiOrder(updated);

@@ -919,4 +919,302 @@ integration('VNPay PostgreSQL Integration: Auth, Callback, IPN Concurrency & Ref
     });
     expect(restoredStock.stock).toBe(20);
   });
+
+  it('[Review 3 - #1] không mở khóa khi QueryDR trả về mã 05 (đang xử lý hoàn tiền) hoặc 06 (đã gửi sang ngân hàng); chặn cả API hoàn tiền lẫn API hủy đơn và không gọi thêm gateway', async () => {
+    const { order } = await createOrderFixture(20, customerAToken);
+    const urlRes = await request(app.getHttpServer())
+      .post('/api/payments/vnpay/create-url')
+      .auth(customerAToken, { type: 'bearer' })
+      .send({ orderId: order.id })
+      .expect(201);
+    const txnRef = urlRes.body.txnRef as string;
+
+    await request(app.getHttpServer())
+      .get('/api/payments/vnpay/ipn')
+      .query(
+        buildSignedVnPayCallback({
+          vnp_Amount: String(order.total * 100),
+          vnp_BankCode: 'NCB',
+          vnp_OrderInfo: `Thanh toan don hang ${order.code}`,
+          vnp_PayDate: '20261028170000',
+          vnp_ResponseCode: '00',
+          vnp_TmnCode: TEST_TMN_CODE,
+          vnp_TransactionNo: '17000001',
+          vnp_TransactionStatus: '00',
+          vnp_TxnRef: txnRef,
+        }),
+      )
+      .expect(200);
+
+    // 1. Gửi hoàn tiền lần đầu gặp timeout -> chuyển sang PENDING_RECONCILIATION (httpStatus = 201)
+    jest.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new Error('Gateway network timeout'));
+
+    await request(app.getHttpServer())
+      .post('/api/payments/vnpay/refund')
+      .auth(customerAToken, { type: 'bearer' })
+      .send({ orderId: order.id })
+      .expect(502);
+
+    // 2. Kiểm tra lần lượt mã 05 (VNPay đang xử lý giao dịch hoàn tiền) và mã 06 (VNPay đã gửi yêu cầu hoàn tiền sang ngân hàng)
+    for (const status of ['05', '06']) {
+      const fetchSpy = jest.spyOn(globalThis, 'fetch');
+      fetchSpy.mockClear();
+      fetchSpy.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify(
+            buildSignedQueryDrGatewayResponse({
+              txnRef,
+              orderCode: order.code,
+              amount: order.total,
+              transactionType: '02',
+              transactionStatus: status,
+              message: `Refund processing status ${status}`,
+            }),
+          ),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      );
+
+      const queryRes = await request(app.getHttpServer())
+        .post('/api/payments/vnpay/querydr')
+        .auth(customerAToken, { type: 'bearer' })
+        .send({ orderId: order.id })
+        .expect(200);
+
+      // Không được chuyển sang RECONCILED_NOT_REFUNDED mà phải giữ nguyên PENDING_RECONCILIATION
+      expect(queryRes.body.transaction.refundStatus).toBe('PENDING_RECONCILIATION');
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+      const recordInDb = await prisma.idempotencyRecord.findFirstOrThrow({
+        where: { key: txnRef },
+      });
+      expect(recordInDb.httpStatus).toBe(201);
+      expect((recordInDb.response as Record<string, unknown>).refundStatus).toBe(
+        'PENDING_RECONCILIATION',
+      );
+
+      // Gọi lại API hoàn tiền và API hủy đơn đều bị chặn 409 và KHÔNG gọi thêm tới gateway (fetchSpy vẫn = 1)
+      const retryRefund = await request(app.getHttpServer())
+        .post('/api/payments/vnpay/refund')
+        .auth(customerAToken, { type: 'bearer' })
+        .send({ orderId: order.id })
+        .expect(409);
+      expect(retryRefund.body.code).toBe('REFUND_PENDING_RECONCILIATION');
+
+      const retryCancel = await request(app.getHttpServer())
+        .post(`/api/orders/${order.id}/cancel`)
+        .auth(customerAToken, { type: 'bearer' })
+        .send({ expectedVersion: 1 })
+        .expect(409);
+      expect(retryCancel.body.code).toBe('REFUND_PENDING_RECONCILIATION');
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    }
+
+    // 3. Chỉ khi QueryDR xác nhận rõ ràng cho phép thao tác tiếp (ví dụ vnp_TransactionType = '01', vnp_TransactionStatus = '00') mới mở khóa
+    jest.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(
+        JSON.stringify(
+          buildSignedQueryDrGatewayResponse({
+            txnRef,
+            orderCode: order.code,
+            amount: order.total,
+            transactionType: '01',
+            transactionStatus: '00',
+          }),
+        ),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    const unlockedQuery = await request(app.getHttpServer())
+      .post('/api/payments/vnpay/querydr')
+      .auth(customerAToken, { type: 'bearer' })
+      .send({ orderId: order.id })
+      .expect(200);
+    expect(unlockedQuery.body.transaction.refundStatus).toBe('RECONCILED_NOT_REFUNDED');
+  });
+
+  it('[Review 3 - #2] đồng bộ đúng trạng thái đơn khi hoàn tiền được xác nhận muộn, chặn chuyển trạng thái khi đang chờ đối soát, xử lý cập nhật đồng thời và QueryDR gọi lặp', async () => {
+    const { order, ingredient } = await createOrderFixture(20, customerAToken);
+    const urlRes = await request(app.getHttpServer())
+      .post('/api/payments/vnpay/create-url')
+      .auth(customerAToken, { type: 'bearer' })
+      .send({ orderId: order.id })
+      .expect(201);
+    const txnRef = urlRes.body.txnRef as string;
+
+    await request(app.getHttpServer())
+      .get('/api/payments/vnpay/ipn')
+      .query(
+        buildSignedVnPayCallback({
+          vnp_Amount: String(order.total * 100),
+          vnp_BankCode: 'NCB',
+          vnp_OrderInfo: `Thanh toan don hang ${order.code}`,
+          vnp_PayDate: '20261028171500',
+          vnp_ResponseCode: '00',
+          vnp_TmnCode: TEST_TMN_CODE,
+          vnp_TransactionNo: '17150001',
+          vnp_TransactionStatus: '00',
+          vnp_TxnRef: txnRef,
+        }),
+      )
+      .expect(200);
+
+    // Bước 1: Đơn PAID gửi hoàn tiền nhưng chưa rõ kết quả -> PENDING_RECONCILIATION
+    jest.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new Error('Gateway timeout'));
+
+    await request(app.getHttpServer())
+      .post('/api/payments/vnpay/refund')
+      .auth(customerAToken, { type: 'bearer' })
+      .send({ orderId: order.id })
+      .expect(502);
+
+    // Bước 2A: Khi đang PENDING_RECONCILIATION, nhân viên gọi API chuyển trạng thái sang PREPARING bị chặn 409 REFUND_PENDING_RECONCILIATION
+    const blockedStaffTransition = await request(app.getHttpServer())
+      .patch(`/api/orders/${order.id}/status`)
+      .auth(staffToken, { type: 'bearer' })
+      .send({ expectedVersion: 1, status: 'PREPARING' })
+      .expect(409);
+    expect(blockedStaffTransition.body.code).toBe('REFUND_PENDING_RECONCILIATION');
+
+    // Bước 2B: Giả lập ngoại lệ thực tế nơi đơn hàng đã chuyển sang PREPARING (CONSUMED) trước khi kết quả hoàn tiền muộn về tới
+    await prisma.order.update({
+      where: { id: order.id },
+      data: { status: 'PREPARING', reservationStatus: 'CONSUMED', version: 2 },
+    });
+
+    // Bước 3: QueryDR xác nhận hoàn tiền thành công (vnp_TransactionType = '02', vnp_TransactionStatus = '00')
+    jest.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(
+        JSON.stringify(
+          buildSignedQueryDrGatewayResponse({
+            txnRef,
+            orderCode: order.code,
+            amount: order.total,
+            transactionType: '02',
+            transactionStatus: '00',
+            message: 'Late refund confirmation',
+          }),
+        ),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    const lateQuery1 = await request(app.getHttpServer())
+      .post('/api/payments/vnpay/querydr')
+      .auth(staffToken, { type: 'bearer' })
+      .send({ orderId: order.id })
+      .expect(200);
+
+    // Phản hồi KHÔNG được gán cứng orderStatus = 'CANCELLED', mà phải trả đúng trạng thái thực tế PREPARING & CONSUMED,
+    // ghi nhận paymentStatus = 'REFUNDED', refundStatus = 'REFUNDED_LATE_MANUAL_REVIEW' và requiresManualReview = true
+    expect(lateQuery1.body.transaction.orderStatus).toBe('PREPARING');
+    expect(lateQuery1.body.transaction.reservationStatus).toBe('CONSUMED');
+    expect(lateQuery1.body.transaction.paymentStatus).toBe('REFUNDED');
+    expect(lateQuery1.body.transaction.refundStatus).toBe('REFUNDED_LATE_MANUAL_REVIEW');
+    expect(lateQuery1.body.transaction.requiresManualReview).toBe(true);
+    expect(lateQuery1.body.message).toContain('PREPARING');
+
+    const dbOrderAfterLate1 = await prisma.order.findUniqueOrThrow({ where: { id: order.id } });
+    expect(dbOrderAfterLate1.status).toBe('PREPARING');
+    expect(dbOrderAfterLate1.reservationStatus).toBe('CONSUMED');
+
+    // Nguyên liệu vẫn giữ CONSUMED (20 - 2 = 18), không tự hoàn kho trái quy tắc khi đơn đang pha chế
+    const stockDuringPreparing = await prisma.ingredient.findUniqueOrThrow({
+      where: { id: ingredient.id },
+    });
+    expect(stockDuringPreparing.stock).toBe(18);
+
+    // Bước 4: Gọi QueryDR lặp lại lần 2 (idempotent) vẫn trả đúng PREPARING, CONSUMED, REFUNDED_LATE_MANUAL_REVIEW
+    jest.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(
+        JSON.stringify(
+          buildSignedQueryDrGatewayResponse({
+            txnRef,
+            orderCode: order.code,
+            amount: order.total,
+            transactionType: '02',
+            transactionStatus: '00',
+            message: 'Repeated QueryDR call',
+          }),
+        ),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    const lateQuery2 = await request(app.getHttpServer())
+      .post('/api/payments/vnpay/querydr')
+      .auth(staffToken, { type: 'bearer' })
+      .send({ orderId: order.id })
+      .expect(200);
+
+    expect(lateQuery2.body.transaction.orderStatus).toBe('PREPARING');
+    expect(lateQuery2.body.transaction.reservationStatus).toBe('CONSUMED');
+    expect(lateQuery2.body.transaction.paymentStatus).toBe('REFUNDED');
+    expect(lateQuery2.body.transaction.refundStatus).toBe('REFUNDED_LATE_MANUAL_REVIEW');
+    expect(lateQuery2.body.transaction.requiresManualReview).toBe(true);
+
+    // Bước 5: Kiểm thử cập nhật trạng thái đồng thời giữa hoàn tiền VNPay và nhân viên chuyển sang PREPARING trên đơn mới
+    const { order: orderConcurrent } = await createOrderFixture(20, customerAToken);
+    const urlRes2 = await request(app.getHttpServer())
+      .post('/api/payments/vnpay/create-url')
+      .auth(customerAToken, { type: 'bearer' })
+      .send({ orderId: orderConcurrent.id })
+      .expect(201);
+    const txnRef2 = urlRes2.body.txnRef as string;
+
+    await request(app.getHttpServer())
+      .get('/api/payments/vnpay/ipn')
+      .query(
+        buildSignedVnPayCallback({
+          vnp_Amount: String(orderConcurrent.total * 100),
+          vnp_BankCode: 'NCB',
+          vnp_OrderInfo: `Thanh toan don hang ${orderConcurrent.code}`,
+          vnp_PayDate: '20261028172000',
+          vnp_ResponseCode: '00',
+          vnp_TmnCode: TEST_TMN_CODE,
+          vnp_TransactionNo: '17200001',
+          vnp_TransactionStatus: '00',
+          vnp_TxnRef: txnRef2,
+        }),
+      )
+      .expect(200);
+
+    jest.spyOn(globalThis, 'fetch').mockImplementationOnce(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      return new Response(
+        JSON.stringify(
+          buildSignedRefundGatewayResponse({
+            txnRef: txnRef2,
+            orderCode: orderConcurrent.code,
+            amount: orderConcurrent.total,
+            responseCode: '00',
+            transactionStatus: '00',
+          }),
+        ),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    });
+
+    const [refundReq, staffTransitionReq] = await Promise.all([
+      request(app.getHttpServer())
+        .post('/api/payments/vnpay/refund')
+        .auth(customerAToken, { type: 'bearer' })
+        .send({ orderId: orderConcurrent.id }),
+      new Promise<request.Response>((resolve) =>
+        setTimeout(() => {
+          request(app.getHttpServer())
+            .patch(`/api/orders/${orderConcurrent.id}/status`)
+            .auth(staffToken, { type: 'bearer' })
+            .send({ expectedVersion: 1, status: 'PREPARING' })
+            .then(resolve);
+        }, 20),
+      ),
+    ]);
+
+    expect(refundReq.status).toBe(200);
+    expect(refundReq.body.transaction.orderStatus).toBe('CANCELLED');
+    expect(staffTransitionReq.status).toBe(409);
+    expect(staffTransitionReq.body.code).toBe('REFUND_PENDING_RECONCILIATION');
+  });
 });

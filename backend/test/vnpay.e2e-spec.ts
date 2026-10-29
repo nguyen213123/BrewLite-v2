@@ -586,4 +586,299 @@ describe('VnPayService (#10 VNPay Sandbox Integration)', () => {
     expect(state.idemResponse.refundStatus).toBe('REFUNDED');
     expect(loyaltyMock.reverse).toHaveBeenCalledTimes(1);
   });
+
+  it('[Review 3 - #1 & #2] giữ khóa chờ đối soát khi QueryDR trả mã 05 hoặc 06; xử lý xác nhận hoàn tiền muộn khi đơn đã PREPARING và gọi QueryDR lặp lại nhất quán', async () => {
+    const userId = '11111111-1111-4111-8111-111111111111';
+    const orderId = '22222222-2222-4222-8222-222222222222';
+    const paymentId = '33333333-3333-4333-8333-333333333333';
+    const recordId = '44444444-4444-4444-8444-444444444444';
+    const txnRef = 'BL-20261028-001_123456ab';
+
+    const state = {
+      orderStatus: 'PAID' as 'PAID' | 'PREPARING' | 'CANCELLED',
+      reservationStatus: 'CONSUMED' as 'CONSUMED' | 'RELEASED',
+      orderVersion: 1,
+      paymentStatus: 'SUCCEEDED' as 'SUCCEEDED' | 'REFUNDED',
+      idemStatus: 'COMPLETED' as const,
+      idemHttpStatus: 201,
+      idemResponse: {
+        provider: 'VNPAY',
+        orderId,
+        orderCode: 'BL-20261028-001',
+        txnRef,
+        transactionNo: '14567890',
+        payDate: '20261028140000',
+        refundStatus: 'PENDING_RECONCILIATION',
+      } as Record<string, unknown>,
+    };
+
+    const makeOrderRow = () => ({
+      id: orderId,
+      code: 'BL-20261028-001',
+      userId,
+      promotionId: null,
+      promotionCode: null,
+      subtotal: 50000,
+      discount: 0,
+      total: 50000,
+      status: state.orderStatus,
+      reservationStatus: state.reservationStatus,
+      version: state.orderVersion,
+      createdAt: new Date('2026-10-28T07:00:00Z'),
+      updatedAt: new Date('2026-10-28T07:00:00Z'),
+      user: { id: userId, email: 'customer@example.com' },
+      items: [],
+      payments: [
+        {
+          id: paymentId,
+          orderId,
+          method: 'CARD' as const,
+          status: state.paymentStatus,
+          amount: 50000,
+          idempotencyKey: txnRef,
+          idempotencyRecordId: recordId,
+          createdAt: new Date('2026-10-28T07:00:00Z'),
+          updatedAt: new Date('2026-10-28T07:00:00Z'),
+          idempotency: {
+            id: recordId,
+            status: state.idemStatus,
+            httpStatus: state.idemHttpStatus,
+            response: state.idemResponse,
+          },
+        },
+      ],
+    });
+
+    const prismaBase = {
+      order: {
+        findFirst: jest.fn(async () => makeOrderRow()),
+        findUnique: jest.fn(async () => makeOrderRow()),
+      },
+      payment: {
+        findMany: jest.fn(async () => [
+          {
+            ...makeOrderRow().payments[0],
+            order: makeOrderRow(),
+          },
+        ]),
+        findUnique: jest.fn(async () => ({
+          ...makeOrderRow().payments[0],
+          order: makeOrderRow(),
+        })),
+        update: jest.fn(async ({ data }: { data: { status: 'REFUNDED' } }) => {
+          state.paymentStatus = data.status;
+        }),
+      },
+      idempotencyRecord: {
+        updateMany: jest.fn(
+          async ({
+            where,
+            data,
+          }: {
+            where: { id: string; status: string; httpStatus: number };
+            data: { httpStatus: number };
+          }) => {
+            if (
+              where.id === recordId &&
+              state.idemStatus === where.status &&
+              state.idemHttpStatus === where.httpStatus
+            ) {
+              state.idemHttpStatus = data.httpStatus;
+              return { count: 1 };
+            }
+            return { count: 0 };
+          },
+        ),
+        update: jest.fn(
+          async ({
+            data,
+          }: {
+            data: { status: 'COMPLETED'; httpStatus: number; response: Record<string, unknown> };
+          }) => {
+            state.idemStatus = data.status;
+            state.idemHttpStatus = data.httpStatus;
+            state.idemResponse = data.response;
+          },
+        ),
+      },
+    };
+    const prismaMock = {
+      ...prismaBase,
+      $transaction: jest.fn(
+        async <T>(cb: (tx: typeof prismaBase) => Promise<T>): Promise<T> => cb(prismaBase),
+      ),
+    };
+
+    const transitionsMock = {
+      loadOwned: jest.fn(async () => makeOrderRow()),
+      transition: jest.fn(async () => {
+        state.orderStatus = 'CANCELLED';
+        state.reservationStatus = 'RELEASED';
+        state.orderVersion += 1;
+        return makeOrderRow();
+      }),
+    };
+    const loyaltyMock = { earn: jest.fn(), reverse: jest.fn(async () => undefined) };
+    const uowMock = { run: async <T>(cb: (tx: unknown) => Promise<T>) => cb(prismaMock) };
+
+    const ordersService = new OrdersService(
+      uowMock as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      transitionsMock as never,
+      loyaltyMock as never,
+      {} as never,
+      prismaMock as never,
+      service,
+    );
+
+    const paymentsController = new PaymentsController(
+      {} as never,
+      service,
+      prismaMock as never,
+      transitionsMock as never,
+      loyaltyMock as never,
+    );
+
+    const fakeReq = {
+      headers: {},
+      socket: { remoteAddress: '127.0.0.1' },
+    } as unknown as Request;
+
+    // 1. Khi QueryDR trả về mã 05 (VNPay đang xử lý hoàn tiền) và mã 06 (VNPay đã gửi hoàn tiền sang ngân hàng):
+    // Giữ nguyên khóa httpStatus = 201 và refundStatus = 'PENDING_RECONCILIATION', chặn gọi lại refund và cancel (không gọi thêm gateway)
+    for (const processingCode of ['05', '06']) {
+      const qBody: Record<string, string> = {
+        vnp_ResponseId: `QRES_${processingCode}`,
+        vnp_Command: 'querydr',
+        vnp_ResponseCode: '00',
+        vnp_Message: 'QueryDR Success',
+        vnp_TmnCode: TEST_TMN_CODE,
+        vnp_TxnRef: txnRef,
+        vnp_Amount: '5000000',
+        vnp_BankCode: 'NCB',
+        vnp_PayDate: '20261028140000',
+        vnp_TransactionNo: '14567890',
+        vnp_TransactionType: '02',
+        vnp_TransactionStatus: processingCode,
+        vnp_OrderInfo: 'Truy van giao dich BL-20261028-001',
+        vnp_PromotionCode: '',
+        vnp_PromotionAmount: '',
+      };
+      qBody.vnp_SecureHash = computeVnPayQueryDrResponseHash(qBody, TEST_HASH_SECRET);
+
+      const fetchSpy = jest.spyOn(globalThis, 'fetch');
+      fetchSpy.mockClear();
+      fetchSpy.mockResolvedValueOnce(
+        new Response(JSON.stringify(qBody), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+
+      const qRes = await paymentsController.queryVnPayTransaction(
+        { id: userId, email: 'customer@example.com', role: 'CUSTOMER' },
+        { orderId },
+        fakeReq,
+      );
+      expect(qRes.transaction.refundStatus).toBe('PENDING_RECONCILIATION');
+      expect(state.idemHttpStatus).toBe(201);
+      expect(state.idemResponse.refundStatus).toBe('PENDING_RECONCILIATION');
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+      // Gọi lại API hoàn tiền và API hủy đơn đều bị chặn 409 và không gọi thêm tới gateway
+      await expect(
+        paymentsController.refundVnPayTransaction(
+          { id: userId, email: 'customer@example.com', role: 'CUSTOMER' },
+          { orderId },
+          fakeReq,
+        ),
+      ).rejects.toMatchObject({
+        status: 409,
+        response: { code: 'REFUND_PENDING_RECONCILIATION' },
+      });
+
+      await expect(ordersService.cancel(userId, orderId, 1)).rejects.toMatchObject({
+        status: 409,
+        response: { code: 'REFUND_PENDING_RECONCILIATION' },
+      });
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    }
+
+    // 2. Trong lúc đang PENDING_RECONCILIATION, nhân viên gọi OrdersService.transition sang PREPARING bị chặn 409
+    await expect(
+      ordersService.transition('staff-id', orderId, { expectedVersion: 1, status: 'PREPARING' }),
+    ).rejects.toMatchObject({
+      status: 409,
+      response: { code: 'REFUND_PENDING_RECONCILIATION' },
+    });
+
+    // 3. Kịch bản xác nhận hoàn tiền muộn khi đơn đã chuyển sang PREPARING (CONSUMED):
+    // Không cưỡng ép hủy đơn, giữ nguyên PREPARING & CONSUMED, ghi nhận Payment = REFUNDED,
+    // đánh dấu REFUNDED_LATE_MANUAL_REVIEW (requiresManualReview = true) và KHÔNG trả cứng orderStatus = CANCELLED
+    state.orderStatus = 'PREPARING';
+    state.reservationStatus = 'CONSUMED';
+    state.orderVersion = 2;
+
+    const lateRefundQueryBody: Record<string, string> = {
+      vnp_ResponseId: 'QRES_LATE_00',
+      vnp_Command: 'querydr',
+      vnp_ResponseCode: '00',
+      vnp_Message: 'QueryDR Success',
+      vnp_TmnCode: TEST_TMN_CODE,
+      vnp_TxnRef: txnRef,
+      vnp_Amount: '5000000',
+      vnp_BankCode: 'NCB',
+      vnp_PayDate: '20261028140000',
+      vnp_TransactionNo: '14567890',
+      vnp_TransactionType: '02',
+      vnp_TransactionStatus: '00',
+      vnp_OrderInfo: 'Truy van giao dich BL-20261028-001',
+      vnp_PromotionCode: '',
+      vnp_PromotionAmount: '',
+    };
+    lateRefundQueryBody.vnp_SecureHash = computeVnPayQueryDrResponseHash(
+      lateRefundQueryBody,
+      TEST_HASH_SECRET,
+    );
+
+    jest.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(JSON.stringify(lateRefundQueryBody), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    const lateRes1 = await paymentsController.queryVnPayTransaction(
+      { id: userId, email: 'customer@example.com', role: 'CUSTOMER' },
+      { orderId },
+      fakeReq,
+    );
+    expect(lateRes1.transaction.orderStatus).toBe('PREPARING');
+    expect(lateRes1.transaction.reservationStatus).toBe('CONSUMED');
+    expect(lateRes1.transaction.paymentStatus).toBe('REFUNDED');
+    expect(lateRes1.transaction.refundStatus).toBe('REFUNDED_LATE_MANUAL_REVIEW');
+    expect(lateRes1.transaction.requiresManualReview).toBe(true);
+    expect(transitionsMock.transition).not.toHaveBeenCalled();
+
+    // 4. Gọi QueryDR lặp lại lần 2 vẫn trả về nhất quán trạng thái thực tế trong DB (PREPARING / CONSUMED / REFUNDED_LATE_MANUAL_REVIEW)
+    jest.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(JSON.stringify(lateRefundQueryBody), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    const lateRes2 = await paymentsController.queryVnPayTransaction(
+      { id: userId, email: 'customer@example.com', role: 'CUSTOMER' },
+      { orderId },
+      fakeReq,
+    );
+    expect(lateRes2.transaction.orderStatus).toBe('PREPARING');
+    expect(lateRes2.transaction.reservationStatus).toBe('CONSUMED');
+    expect(lateRes2.transaction.paymentStatus).toBe('REFUNDED');
+    expect(lateRes2.transaction.refundStatus).toBe('REFUNDED_LATE_MANUAL_REVIEW');
+    expect(lateRes2.transaction.requiresManualReview).toBe(true);
+  });
 });
