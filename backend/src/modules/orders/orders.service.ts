@@ -15,7 +15,6 @@ import { UnitOfWork } from '../../common/database/unit-of-work';
 import { ApiError } from '../../common/errors/api-error';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
-  describeVnPayGatewayReply,
   formatVnPayDate,
   VnPayService,
 } from '../payments/vnpay.service';
@@ -141,7 +140,7 @@ export class OrdersService implements OrdersPort {
           throw new ApiError(
             409,
             'REFUND_PENDING_RECONCILIATION',
-            'Yêu cầu hoàn tiền VNPay trước đó chưa rõ kết quả và đang chờ đối soát. Không gửi hoàn tiền lặp.',
+            'Đơn hàng đang được hoàn tiền, xin khách hàng vui lòng chờ kiểm tra.',
           );
         }
 
@@ -182,7 +181,7 @@ export class OrdersService implements OrdersPort {
               throw new ApiError(
                 409,
                 'REFUND_IN_PROGRESS',
-                'Giao dịch đang trong quá trình xử lý hoàn tiền hoặc chờ đối soát, không gửi hoàn tiền trùng lặp',
+                'Đơn hàng đang được hoàn tiền, xin khách hàng vui lòng chờ kiểm tra.',
               );
             }
 
@@ -242,7 +241,7 @@ export class OrdersService implements OrdersPort {
             throw new ApiError(
               502,
               'VNPAY_REFUND_UNCERTAIN',
-              `Chưa xác nhận được kết quả hoàn tiền từ cổng VNPay. ${describeVnPayGatewayReply(gatewayResult)} Giao dịch được giữ ở trạng thái chờ đối soát, không hủy đơn và không gửi hoàn tiền lặp.`,
+              'Đơn hàng đang được hoàn tiền, xin khách hàng vui lòng chờ kiểm tra.',
             );
           }
 

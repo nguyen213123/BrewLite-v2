@@ -178,7 +178,30 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
         } catch {}
       }
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : 'Không thể hủy đơn hàng.');
+      if (err instanceof ApiRequestError) {
+        if (
+          err.code === 'VNPAY_REFUND_UNCERTAIN' ||
+          err.code === 'REFUND_PENDING_RECONCILIATION' ||
+          err.code === 'REFUND_IN_PROGRESS' ||
+          err.code === 'REFUND_ALREADY_SUBMITTED' ||
+          err.message?.includes('chờ đối soát') ||
+          err.message?.includes('Chưa xác nhận') ||
+          err.message?.includes('hoàn tiền')
+        ) {
+          setActionError('Đơn hàng đang được hoàn tiền, xin khách hàng vui lòng chờ kiểm tra.');
+        } else {
+          setActionError(err.message || 'Không thể hủy đơn hàng.');
+        }
+      } else if (
+        err instanceof Error &&
+        (err.message.includes('chờ đối soát') ||
+          err.message.includes('Chưa xác nhận') ||
+          err.message.includes('hoàn tiền'))
+      ) {
+        setActionError('Đơn hàng đang được hoàn tiền, xin khách hàng vui lòng chờ kiểm tra.');
+      } else {
+        setActionError(err instanceof Error ? err.message : 'Không thể hủy đơn hàng.');
+      }
     } finally {
       setActionBusy(false);
     }
@@ -297,7 +320,11 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
             {actionError && (
               <div
                 role="alert"
-                className="rounded-xl border border-[#e5b8b8] bg-[#fbeaea] p-3.5 text-xs font-bold text-[#9b2c2c]"
+                className={`rounded-xl border p-3.5 text-xs font-bold ${
+                  actionError.includes('vui lòng chờ kiểm tra')
+                    ? 'border-[#f3d29a] bg-[#fffaf0] text-[#975a16]'
+                    : 'border-[#e5b8b8] bg-[#fbeaea] text-[#9b2c2c]'
+                }`}
               >
                 {actionError}
               </div>
