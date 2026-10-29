@@ -14,7 +14,11 @@ import type * as Api from '../../common/contracts/api.generated';
 import { UnitOfWork } from '../../common/database/unit-of-work';
 import { ApiError } from '../../common/errors/api-error';
 import { PrismaService } from '../../prisma/prisma.service';
-import { formatVnPayDate, VnPayService } from '../payments/vnpay.service';
+import {
+  describeVnPayGatewayReply,
+  formatVnPayDate,
+  VnPayService,
+} from '../payments/vnpay.service';
 import { buildQuote, generateOrderCode, normalizeCartItems } from './domain/order-pricing';
 import { toApiOrder } from './order.mapper';
 
@@ -229,6 +233,8 @@ export class OrdersService implements OrdersPort {
                   refundStatus: 'PENDING_RECONCILIATION',
                   lastRefundResponseCode: gatewayResult.vnp_ResponseCode,
                   lastRefundMessage: gatewayResult.vnp_Message,
+                  lastGatewayResponseCode: gatewayResult.gatewayResponseCode ?? null,
+                  lastGatewayMessage: gatewayResult.gatewayMessage ?? null,
                 },
               },
             });
@@ -236,7 +242,7 @@ export class OrdersService implements OrdersPort {
             throw new ApiError(
               502,
               'VNPAY_REFUND_UNCERTAIN',
-              'Chưa xác nhận được kết quả hoàn tiền từ cổng VNPay. Giao dịch được giữ ở trạng thái chờ đối soát, không hủy đơn và không gửi hoàn tiền lặp.',
+              `Chưa xác nhận được kết quả hoàn tiền từ cổng VNPay. ${describeVnPayGatewayReply(gatewayResult)} Giao dịch được giữ ở trạng thái chờ đối soát, không hủy đơn và không gửi hoàn tiền lặp.`,
             );
           }
 

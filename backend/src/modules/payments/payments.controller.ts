@@ -31,6 +31,7 @@ import {
 } from './dto/payment.dto';
 import {
   VnPayService,
+  describeVnPayGatewayReply,
   isVnPayRefundProcessingStatus,
   type VnPayVerifyResult,
 } from './vnpay.service';
@@ -711,6 +712,8 @@ export class PaymentsController {
             refundStatus: 'PENDING_RECONCILIATION',
             lastRefundResponseCode: gatewayResult.vnp_ResponseCode,
             lastRefundMessage: gatewayResult.vnp_Message,
+            lastGatewayResponseCode: gatewayResult.gatewayResponseCode ?? null,
+            lastGatewayMessage: gatewayResult.gatewayMessage ?? null,
           },
         },
       });
@@ -718,7 +721,7 @@ export class PaymentsController {
       throw new ApiError(
         502,
         'VNPAY_REFUND_UNCERTAIN',
-        'Chưa xác nhận được kết quả hoàn tiền từ cổng VNPay. Giao dịch được giữ ở trạng thái chờ đối soát, không gửi hoàn tiền lặp.',
+        `Chưa xác nhận được kết quả hoàn tiền từ cổng VNPay. ${describeVnPayGatewayReply(gatewayResult)} Giao dịch được giữ ở trạng thái chờ đối soát, không gửi hoàn tiền lặp.`,
       );
     }
 

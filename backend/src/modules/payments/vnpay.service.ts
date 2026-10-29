@@ -49,6 +49,20 @@ export interface VnPayGatewayApiResult {
   vnp_TransactionType: string;
   vnp_TransactionStatus: string;
   vnp_Command: 'querydr' | 'refund';
+  /** Mã phản hồi nguyên văn do cổng VNPay trả về (không qua diễn giải), để hiển thị đúng thông báo của VNPay */
+  gatewayResponseCode?: string;
+  /** Thông điệp nguyên văn do cổng VNPay trả về */
+  gatewayMessage?: string;
+}
+
+/**
+ * Mô tả nguyên văn phản hồi của cổng VNPay để hiển thị cho người dùng (không tự diễn giải thành công).
+ */
+export function describeVnPayGatewayReply(result: Pick<VnPayGatewayApiResult, 'gatewayResponseCode' | 'gatewayMessage'>): string {
+  if (!result.gatewayResponseCode && !result.gatewayMessage) {
+    return 'Không nhận được phản hồi từ cổng VNPay.';
+  }
+  return `Phản hồi từ VNPay: "${result.gatewayMessage ?? ''}" (mã ${result.gatewayResponseCode ?? 'không có'}).`;
 }
 
 export function formatVnPayDate(date: Date): string {
@@ -546,6 +560,8 @@ export class VnPayService {
         vnp_TransactionType: transactionType,
         vnp_TransactionStatus: '99',
         vnp_Command: 'refund',
+        gatewayResponseCode: `HTTP ${res.status}`,
+        gatewayMessage: res.statusText,
       };
     }
 
@@ -586,6 +602,8 @@ export class VnPayService {
         vnp_TransactionType: json.vnp_TransactionType ?? transactionType,
         vnp_TransactionStatus: json.vnp_TransactionStatus ?? '99',
         vnp_Command: 'refund',
+        gatewayResponseCode: json.vnp_ResponseCode,
+        gatewayMessage: json.vnp_Message,
       };
     }
 
@@ -619,6 +637,8 @@ export class VnPayService {
         vnp_TransactionType: json.vnp_TransactionType ?? '',
         vnp_TransactionStatus: json.vnp_TransactionStatus ?? '99',
         vnp_Command: 'refund',
+        gatewayResponseCode: json.vnp_ResponseCode,
+        gatewayMessage: json.vnp_Message,
       };
     }
 
@@ -652,6 +672,8 @@ export class VnPayService {
       vnp_TransactionType: json.vnp_TransactionType,
       vnp_TransactionStatus: transactionStatus || responseCode || '99',
       vnp_Command: 'refund',
+      gatewayResponseCode: json.vnp_ResponseCode,
+      gatewayMessage: json.vnp_Message,
     };
   }
 

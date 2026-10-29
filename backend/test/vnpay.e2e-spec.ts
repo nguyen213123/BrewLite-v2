@@ -6,6 +6,7 @@ import {
   VnPayService,
   computeVnPayQueryDrResponseHash,
   computeVnPayRefundResponseHash,
+  describeVnPayGatewayReply,
   sortAndEncode,
 } from '../src/modules/payments/vnpay.service';
 
@@ -271,6 +272,22 @@ describe('VnPayService (#10 VNPay Sandbox Integration)', () => {
     const missingSigRes = await service.refundTransaction(refundInput);
     expect(missingSigRes.outcome).toBe('UNCERTAIN');
     expect(missingSigRes.vnp_ResponseCode).toBe('97');
+
+    // 1b. VNPay Sandbox trả nguyên văn {"vnp_ResponseCode":"99","vnp_Message":"Unexpected error"} không kèm chữ ký
+    // -> UNCERTAIN, giữ nguyên mã và thông điệp gốc của VNPay để hiển thị, không tự tạo kết quả thành công
+    jest.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(JSON.stringify({ vnp_ResponseCode: '99', vnp_Message: 'Unexpected error' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    const sandbox99Res = await service.refundTransaction(refundInput);
+    expect(sandbox99Res.outcome).toBe('UNCERTAIN');
+    expect(sandbox99Res.gatewayResponseCode).toBe('99');
+    expect(sandbox99Res.gatewayMessage).toBe('Unexpected error');
+    expect(describeVnPayGatewayReply(sandbox99Res)).toBe(
+      'Phản hồi từ VNPay: "Unexpected error" (mã 99).',
+    );
 
     // 2. Phản hồi có vnp_ResponseCode = '00' nhưng sai chữ ký vnp_SecureHash -> UNCERTAIN
     jest.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
