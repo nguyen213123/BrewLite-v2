@@ -199,6 +199,27 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
   const [method, setMethod] = useState<PaymentMethod>(state.attempt?.request.method ?? 'WALLET');
   const [outcome, setOutcome] = useState<'SUCCESS' | 'FAIL'>(state.attempt?.request.mockOutcome ?? 'SUCCESS');
   const [busy, setBusy] = useState(Boolean(state.orderId || initialOrderId));
+  const [vnpayLoading, setVnpayLoading] = useState(false);
+
+  const handleVnPayPayment = async () => {
+    if (!state.order) return;
+    setError('');
+    setVnpayLoading(true);
+    try {
+      const data = await apiPost<{ paymentUrl: string }>('/payments/vnpay/create-url', {
+        orderId: state.order.id,
+      });
+      if (data?.paymentUrl && typeof window !== 'undefined') {
+        window.location.href = data.paymentUrl;
+      } else {
+        throw new Error('Không thể tạo liên kết thanh toán VNPAY');
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Lỗi kết nối tới cổng thanh toán VNPAY';
+      setError(msg);
+      setVnpayLoading(false);
+    }
+  };
 
   const getLineUnitPrice = (l: (typeof lines)[number]) =>
     (l.sizePrice ?? 0) + (l.toppings ?? []).reduce((sum, t) => sum + (t.price ?? 0), 0);
@@ -367,7 +388,7 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
             <p className="eyebrow">BrewLite Mộc Vị / Thanh toán</p>
             <h1 className="mt-1.5">Hoàn tất đơn của bạn</h1>
             <p className="my-1 text-sm text-[#5c4033]">
-              Thanh toán Ví/Thẻ sử dụng cổng mô phỏng của bài tập. Giá, tồn kho và điểm được xử lý bởi backend.
+              Thanh toán trực tuyến an toàn qua cổng VNPAY Sandbox. Giá, tồn kho và điểm được xử lý bởi backend.
             </p>
           </div>
           <div className="flex items-center gap-2.5 text-xs font-bold">
@@ -840,7 +861,7 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
                 Thanh toán thất bại
               </h1>
               <p className="mt-2 text-sm text-[#7a6254]">
-                Cổng thanh toán mô phỏng ghi nhận giao dịch không thành công (PAYMENT_FAILED).
+                Cổng thanh toán ghi nhận giao dịch không thành công (PAYMENT_FAILED).
               </p>
             </div>
 
@@ -869,49 +890,31 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
               </div>
 
               {/* Khu vực Thử lại thanh toán */}
-              <div className="rounded-2xl border-2 border-[#decbb4] bg-[#faf6ec] p-5 space-y-4">
+              <div className="rounded-2xl border-2 border-[#005baa]/30 bg-gradient-to-br from-blue-50/40 to-white p-5 space-y-4">
                 <div className="flex items-center justify-between">
-                  <h3 className="m-0 text-sm font-extrabold text-[#4a2e20]">
-                    Thử lại thanh toán
+                  <h3 className="m-0 text-sm font-extrabold text-[#005baa]">
+                    Thử lại thanh toán qua cổng VNPAY
                   </h3>
-                  <span className="rounded-full bg-[#cbe8d3] px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-[#2d6a4f]">
-                    Khóa mới
+                  <span className="rounded-full bg-blue-100 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-blue-800">
+                    Bên thứ 3 (Sandbox)
                   </span>
                 </div>
 
-                <label className="block text-xs font-bold text-[#4a2e20]">
-                  Phương thức thanh toán
-                  <select
-                    className="mt-1 w-full"
-                    value={method}
-                    disabled={busy}
-                    onChange={(e) => setMethod(e.target.value as PaymentMethod)}
-                  >
-                    <option value="WALLET">Ví điện tử</option>
-                    <option value="CARD">Thẻ ngân hàng</option>
-                  </select>
-                </label>
-
-                <label className="block text-xs font-bold text-[#4a2e20]">
-                  Kịch bản thử nghiệm
-                  <select
-                    className="mt-1 w-full"
-                    value={outcome}
-                    disabled={busy}
-                    onChange={(e) => setOutcome(e.target.value as 'SUCCESS' | 'FAIL')}
-                  >
-                    <option value="SUCCESS">Thành công (SUCCESS) — Khuyên dùng</option>
-                    <option value="FAIL">Thất bại (FAIL)</option>
-                  </select>
-                </label>
-
                 <button
-                  disabled={busy}
-                  onClick={() => run(() => session.pay(method, outcome, true))}
-                  style={{ width: '100%', margin: 0 }}
-                  className="rounded-full bg-[#6d4c3d] py-3 text-sm font-bold text-white shadow-sm transition hover:bg-[#563a2d]"
+                  type="button"
+                  disabled={busy || vnpayLoading}
+                  onClick={() => void handleVnPayPayment()}
+                  style={{
+                    width: '100%',
+                    margin: 0,
+                    backgroundColor: '#005baa',
+                    color: '#ffffff',
+                    fontWeight: 'bold',
+                    border: 'none',
+                  }}
+                  className="rounded-full py-3 text-sm transition hover:bg-[#004885] disabled:opacity-50"
                 >
-                  {busy ? 'Đang xử lý thanh toán…' : 'Thử lại thanh toán ngay'}
+                  {vnpayLoading ? 'Đang mở cổng VNPAY…' : 'Thanh toán lại qua VNPAY Sandbox →'}
                 </button>
               </div>
 
@@ -1261,54 +1264,65 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
 
           <div className="space-y-6">
             {order && !terminal && (
-              <section className="shop-panel m-0">
+              <section className="shop-panel m-0 border-2 border-[#005baa]/30 bg-gradient-to-br from-blue-50/40 to-white">
                 <div className="flex items-center justify-between border-b border-[#decbb4] pb-3">
-                  <h2 className="m-0">Thanh toán mô phỏng</h2>
-                  <span className="rounded-full bg-[#cbe8d3] px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-[#2d6a4f]">
-                    Mock Gateway
+                  <div className="flex items-center gap-2">
+                    <span className="flex size-7 items-center justify-center rounded-lg bg-[#005baa] text-white text-xs font-black">
+                      VNP
+                    </span>
+                    <h2 className="m-0 text-base font-extrabold text-[#005baa]">
+                      Cổng thanh toán VNPAY
+                    </h2>
+                  </div>
+                  <span className="rounded-full bg-blue-100 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-blue-800">
+                    Bên thứ 3 (Sandbox)
                   </span>
                 </div>
 
-                {state.attempt && (
-                  <p className="rounded-xl border border-[#e2d2b8] bg-[#efe5d4] p-3 text-xs text-[#4a2e20]">
-                    Lần thanh toán hiện tại được lưu để thử lại an toàn sau lỗi mạng.
-                  </p>
-                )}
-
-                <label>
-                  Phương thức{' '}
-                  <select
-                    value={replayAttempt?.request.method ?? method}
-                    disabled={busy || Boolean(replayAttempt)}
-                    onChange={(e) => setMethod(e.target.value as PaymentMethod)}
-                  >
-                    <option value="WALLET">Ví điện tử</option>
-                    <option value="CARD">Thẻ ngân hàng</option>
-                  </select>
-                </label>
-
-                <label>
-                  Kịch bản{' '}
-                  <select
-                    value={replayAttempt ? (replayAttempt.request.mockOutcome ?? 'SUCCESS') : outcome}
-                    disabled={busy || Boolean(replayAttempt)}
-                    onChange={(e) => setOutcome(e.target.value as 'SUCCESS' | 'FAIL')}
-                  >
-                    <option value="SUCCESS">Thành công</option>
-                    <option value="FAIL">Thất bại</option>
-                  </select>
-                </label>
+                <p className="mt-3 text-xs text-[#7a6254]">
+                  Thanh toán an toàn qua cổng <strong>VNPAY Sandbox</strong> hỗ trợ thẻ ATM nội địa (NCB...), Internet Banking và quét mã VNPAY-QR.
+                </p>
 
                 <div className="mt-4">
                   <button
-                    disabled={busy || !state.verified || needsPriceConfirm}
-                    onClick={() => run(() => session.pay(method, outcome))}
-                    style={{ width: '100%', margin: 0 }}
+                    type="button"
+                    disabled={busy || !state.verified || needsPriceConfirm || vnpayLoading}
+                    onClick={() => void handleVnPayPayment()}
+                    style={{
+                      width: '100%',
+                      margin: 0,
+                      backgroundColor: '#005baa',
+                      color: '#ffffff',
+                      fontWeight: 'bold',
+                      border: 'none',
+                    }}
+                    className="flex items-center justify-center gap-2 rounded-xl py-3 text-sm shadow-sm transition hover:bg-[#004885] disabled:opacity-50"
                   >
-                    {state.attempt ? 'Gửi lại cùng lần thanh toán' : 'Xác nhận thanh toán'}
+                    {vnpayLoading ? 'Đang mở cổng VNPAY…' : `Thanh toán ${formatVnd(order.total)} qua VNPAY →`}
                   </button>
                 </div>
               </section>
+            )}
+
+            {order && !terminal && state.attempt && (
+              <div className="hidden" aria-hidden="true">
+                <select
+                  value={replayAttempt?.request.method ?? method}
+                  disabled={busy || Boolean(replayAttempt)}
+                  onChange={(e) => setMethod(e.target.value as PaymentMethod)}
+                >
+                  <option value="WALLET">Ví điện tử</option>
+                  <option value="CARD">Thẻ ngân hàng</option>
+                </select>
+                <select
+                  value={replayAttempt ? (replayAttempt.request.mockOutcome ?? 'SUCCESS') : outcome}
+                  disabled={busy || Boolean(replayAttempt)}
+                  onChange={(e) => setOutcome(e.target.value as 'SUCCESS' | 'FAIL')}
+                >
+                  <option value="SUCCESS">Thành công</option>
+                  <option value="FAIL">Thất bại</option>
+                </select>
+              </div>
             )}
 
             <section className="shop-panel m-0">
@@ -1353,7 +1367,7 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
                     }}
                   >
                     {order.status === 'PAID'
-                      ? 'Hủy đơn và hoàn thanh toán mô phỏng'
+                      ? 'Hủy đơn và hoàn tiền'
                       : 'Hủy đơn và trả hàng đã giữ'}
                   </button>
                 )}
