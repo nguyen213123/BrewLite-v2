@@ -181,6 +181,7 @@ model OrderItemTopping {
 }
 
 model Payment {
+  isDuplicate         Boolean           @default(false)
   id                  String            @id @default(uuid()) @db.Uuid
   orderId             String            @db.Uuid
   idempotencyRecordId String            @unique @db.Uuid
@@ -222,6 +223,7 @@ model OrderEvent {
 }
 
 model IdempotencyRecord {
+  context     Json?
   id          String            @id @default(uuid()) @db.Uuid
   userId      String            @db.Uuid
   scope       IdempotencyScope

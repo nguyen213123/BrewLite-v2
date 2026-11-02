@@ -37,6 +37,9 @@ export class OrderTransactionsService implements OrderTransactionsPort {
       // PAYMENT_FAILED -> PENDING must re-hold stock and promo atomically: only prepareRetry may do it.
       throw new ApiError(409, 'INVALID_ORDER_TRANSITION', 'Thử lại thanh toán phải đi qua prepareRetry');
     }
+    // Refund initiation uses this same row lock. Read payment/refund state only after acquiring it,
+    // otherwise a staff update could pass the pending-refund check before waiting on the order UPDATE.
+    await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${orderId}::uuid FOR UPDATE`;
     const order = await tx.order.findUnique({ where: { id: orderId }, include: WITH_ITEMS });
     if (!order) throw new ApiError(404, 'ORDER_NOT_FOUND', 'Đơn hàng không tồn tại');
     if (order.version !== expectedVersion) throw versionConflict();

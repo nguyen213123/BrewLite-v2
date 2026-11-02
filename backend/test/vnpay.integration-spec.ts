@@ -5,14 +5,21 @@ import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/setup';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { StripeService } from '../src/modules/payments/stripe.service';
+import { OrderTransactionsPort } from '../src/common/contracts/ports';
 import {
   computeVnPayQueryDrResponseHash,
   computeVnPayRefundResponseHash,
   sortAndEncode,
+  VnPayService,
 } from '../src/modules/payments/vnpay.service';
 import { createTempDatabase, type TempDatabase } from './support/temp-database';
 
 const integration = process.env.RUN_DB_TESTS === '1' ? describe : describe.skip;
+
+// Each scenario performs many real HTTP/database operations; allow it to finish before mocks are restored.
+// Unit tests keep Jest's default timeout. Production gateway/transaction timeouts remain unchanged.
+jest.setTimeout(30_000);
 
 const TEST_TMN_CODE = 'TESTTMN1';
 const TEST_HASH_SECRET = 'integration-test-vnpay-hmac-sha512-secret-key';
@@ -124,7 +131,7 @@ integration('VNPay PostgreSQL Integration: Auth, Callback, IPN Concurrency & Ref
     process.env.VNPAY_API_URL = TEST_API_URL;
 
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
-    app = moduleRef.createNestApplication();
+    app = moduleRef.createNestApplication({ rawBody: true });
     configureApp(app);
     await app.init();
     await app.listen(0, '127.0.0.1');
@@ -213,6 +220,202 @@ integration('VNPay PostgreSQL Integration: Auth, Callback, IPN Concurrency & Ref
       promo,
     };
   }
+
+  it.each(['paid', 'cancelled', 'legacy'])('settles Stripe once after early unpaid verification (%s)', async scenario => {
+    const cancelled = scenario === 'cancelled';
+    const { order, ingredient } = await createOrderFixture();
+    const stripe = app.get(StripeService);
+    const sessionId = `cs_test_${randomUUID()}`;
+    jest.spyOn(stripe, 'createCheckoutSession').mockResolvedValue({ sessionId, url: 'https://checkout.stripe.com/test' });
+    const session = await request(app.getHttpServer()).post('/api/payments/stripe/create-session')
+      .auth(customerAToken, { type: 'bearer' }).send({ orderId: order.id }).expect(201);
+    const verification = {
+      isValid: true, isPaid: false, orderId: order.id, orderCode: order.code,
+      stripeRef: session.body.stripeRef, amount: order.total, paymentIntentId: `pi_${randomUUID()}`, message: 'Stripe test',
+    };
+    jest.spyOn(stripe, 'verifySession').mockImplementation(async () => ({ ...verification }));
+    const verify = () => request(app.getHttpServer()).get('/api/payments/stripe/verify').query({ session_id: sessionId });
+    await verify().expect(200).expect(({ body }) => expect(body.success).toBe(false));
+    expect((await prisma.idempotencyRecord.findFirstOrThrow({ where: { key: verification.stripeRef } })).status).toBe('PROCESSING');
+    if (scenario === 'legacy') {
+      await prisma.idempotencyRecord.updateMany({ where: { key: verification.stripeRef }, data: {
+        status: 'COMPLETED', httpStatus: 200, response: { provider: 'STRIPE', success: false },
+      } });
+    }
+    verification.isPaid = true;
+    const savedRef = verification.stripeRef;
+    verification.stripeRef = 'unknown-session-reference';
+    await verify().expect(200).expect(({ body }) => expect(body.success).toBe(false));
+    verification.stripeRef = savedRef;
+    verification.amount--;
+    await verify().expect(200).expect(({ body }) => expect(body.success).toBe(false));
+    verification.amount++;
+    if (cancelled) {
+      await request(app.getHttpServer()).post(`/api/orders/${order.id}/cancel`)
+        .auth(customerAToken, { type: 'bearer' }).send({ expectedVersion: order.version }).expect(200);
+    }
+    const responses = await Promise.all(Array.from({ length: 5 }, () => verify().expect(200)));
+    for (const response of responses) {
+      expect(response.body.success).toBe(!cancelled);
+      if (cancelled) expect(response.body).toMatchObject({ paymentReceived: true, requiresManualReview: true });
+    }
+    expect(await prisma.payment.count({ where: { orderId: order.id, status: 'SUCCEEDED' } })).toBe(1);
+    expect(await prisma.loyaltyEntry.count({ where: { orderId: order.id } })).toBe(0);
+    const current = await prisma.order.findUniqueOrThrow({ where: { id: order.id } });
+    expect(current.status).toBe(cancelled ? 'CANCELLED' : 'PAID');
+    expect((await prisma.ingredient.findUniqueOrThrow({ where: { id: ingredient.id } })).stock).toBe(cancelled ? 20 : 18);
+    if (cancelled) {
+      const inbox = await request(app.getHttpServer()).get('/api/payments/manual-review').auth(staffToken, { type: 'bearer' }).expect(200);
+      expect(inbox.body.items).toEqual(expect.arrayContaining([expect.objectContaining({ orderId: order.id, provider: 'STRIPE' })]));
+    } else {
+      // Force a staff request to read PAID before a concurrent refund marker commits.
+      const payment = await prisma.payment.findFirstOrThrow({ where: { orderId: order.id }, include: { idempotency: true } });
+      let unlock!: () => void;
+      let locked!: () => void;
+      let entered!: () => void;
+      const gate = new Promise<void>(resolve => { unlock = resolve; });
+      const lockReady = new Promise<void>(resolve => { locked = resolve; });
+      const transitionEntered = new Promise<void>(resolve => { entered = resolve; });
+      const transitions = app.get(OrderTransactionsPort);
+      const originalTransition = transitions.transition.bind(transitions);
+      const transitionSpy = jest.spyOn(transitions, 'transition').mockImplementation(async (tx, input) => {
+        entered();
+        return originalTransition(tx, input);
+      });
+      const marker = prisma.$transaction(async tx => {
+        await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${order.id}::uuid FOR UPDATE`;
+        locked();
+        await gate;
+        await tx.idempotencyRecord.update({ where: { id: payment.idempotencyRecordId }, data: {
+          httpStatus: 201, response: { provider: 'STRIPE', refundStatus: 'PENDING_RECONCILIATION' },
+        } });
+      });
+      await lockReady;
+      const staff = request(app.getHttpServer()).patch(`/api/orders/${order.id}/status`).auth(staffToken, { type: 'bearer' })
+        .send({ expectedVersion: current.version, status: 'PREPARING' }).then(response => response);
+      try { await transitionEntered; } finally { unlock(); }
+      await marker;
+      expect((await staff).status).toBe(409);
+      transitionSpy.mockRestore();
+      await prisma.idempotencyRecord.update({ where: { id: payment.idempotencyRecordId }, data: {
+        httpStatus: 200, response: payment.idempotency.response!,
+      } });
+      const refund = jest.spyOn(stripe, 'refundPayment').mockResolvedValueOnce({ outcome: 'UNCERTAIN', refundId: 're_pending', status: 'pending' });
+      const cancel = () => request(app.getHttpServer()).post(`/api/orders/${order.id}/cancel`)
+        .auth(customerAToken, { type: 'bearer' }).send({ expectedVersion: current.version });
+      await cancel().expect(409).expect(({ body }) => expect(body.code).toBe('REFUND_PENDING_RECONCILIATION'));
+      expect((await prisma.order.findUniqueOrThrow({ where: { id: order.id } })).status).toBe('PAID');
+      expect((await prisma.ingredient.findUniqueOrThrow({ where: { id: ingredient.id } })).stock).toBe(18);
+      await request(app.getHttpServer()).patch(`/api/orders/${order.id}/status`).auth(staffToken, { type: 'bearer' })
+        .send({ expectedVersion: current.version, status: 'PREPARING' }).expect(409);
+      refund.mockResolvedValueOnce({ outcome: 'SUCCESS', refundId: 're_pending', status: 'succeeded' });
+      await cancel().expect(200);
+      expect(refund).toHaveBeenLastCalledWith(expect.objectContaining({ refundId: 're_pending', idempotencyKey: expect.any(String) }));
+      expect((await prisma.order.findUniqueOrThrow({ where: { id: order.id } })).status).toBe('CANCELLED');
+      expect((await prisma.ingredient.findUniqueOrThrow({ where: { id: ingredient.id } })).stock).toBe(20);
+      expect(await prisma.payment.count({ where: { orderId: order.id, status: 'REFUNDED' } })).toBe(1);
+    }
+  });
+
+  it.each(['ipn', 'verify'])('records a late successful %s after cancellation once without changing stock or order', async (entry) => {
+    const { order, ingredient, promo } = await createOrderFixture();
+    const session = await request(app.getHttpServer()).post('/api/payments/vnpay/create-url')
+      .auth(customerAToken, { type: 'bearer' }).send({ orderId: order.id }).expect(201);
+    const cancelled = await request(app.getHttpServer()).post(`/api/orders/${order.id}/cancel`)
+      .auth(customerAToken, { type: 'bearer' }).send({ expectedVersion: order.version }).expect(200);
+    const stockBefore = await prisma.ingredient.findUniqueOrThrow({ where: { id: ingredient.id } });
+    const promoBefore = await prisma.promotion.findUniqueOrThrow({ where: { id: promo.id } });
+    const callback = buildSignedVnPayCallback({
+      vnp_Amount: String(order.total * 100), vnp_TmnCode: TEST_TMN_CODE,
+      vnp_TxnRef: session.body.txnRef, vnp_OrderInfo: `Thanh toan don hang ${order.code}`,
+      vnp_ResponseCode: '00', vnp_TransactionStatus: '00',
+      vnp_TransactionNo: `late-${entry}`, vnp_PayDate: '20261028152500',
+    });
+    await request(app.getHttpServer()).get('/api/payments/vnpay/ipn')
+      .query({ ...callback, vnp_SecureHash: 'invalid' }).expect(200).expect(({ body }) => expect(body.RspCode).toBe('97'));
+    const wrongAmountParams = { ...callback, vnp_Amount: '100' } as Record<string, string>;
+    delete wrongAmountParams.vnp_SecureHash;
+    const wrongAmount = buildSignedVnPayCallback(wrongAmountParams);
+    await request(app.getHttpServer()).get('/api/payments/vnpay/ipn')
+      .query(wrongAmount).expect(200).expect(({ body }) => expect(body.RspCode).toBe('04'));
+    expect(await prisma.payment.count({ where: { orderId: order.id } })).toBe(0);
+
+    const first = await request(app.getHttpServer()).get(`/api/payments/vnpay/${entry}`).query(callback).expect(200);
+    if (entry === 'ipn') expect(first.body.RspCode).toBe('00');
+    else expect(first.body).toMatchObject({ success: false, paymentReceived: true, requiresManualReview: true });
+    const repeats = await Promise.all(Array.from({ length: 6 }, (_, i) =>
+      request(app.getHttpServer()).get(`/api/payments/vnpay/${i % 2 ? 'ipn' : 'verify'}`).query(callback).expect(200),
+    ));
+    for (const response of repeats.filter((_, i) => i % 2 === 0)) {
+      expect(response.body).toMatchObject({ success: false, paymentReceived: true, refundStatus: 'MANUAL_REFUND_REQUIRED' });
+    }
+    const payments = await prisma.payment.findMany({ where: { orderId: order.id }, include: { idempotency: true } });
+    expect(payments).toHaveLength(1);
+    expect(payments[0]).toMatchObject({ status: 'SUCCEEDED', amount: order.total, idempotency: {
+      response: { requiresManualReview: true, refundStatus: 'MANUAL_REFUND_REQUIRED' },
+    } });
+    expect(await prisma.order.findUniqueOrThrow({ where: { id: order.id } })).toMatchObject({
+      status: 'CANCELLED', reservationStatus: 'RELEASED', version: cancelled.body.version,
+    });
+    expect(await prisma.ingredient.findUniqueOrThrow({ where: { id: ingredient.id } })).toEqual(stockBefore);
+    expect(await prisma.promotion.findUniqueOrThrow({ where: { id: promo.id } })).toEqual(promoBefore);
+    expect(await prisma.loyaltyEntry.count({ where: { orderId: order.id } })).toBe(0);
+    for (const token of [customerAToken, staffToken]) {
+      const inbox = await request(app.getHttpServer()).get('/api/payments/vnpay/manual-review')
+        .auth(token, { type: 'bearer' }).expect(200);
+      expect(inbox.body.items).toEqual(expect.arrayContaining([expect.objectContaining({
+        paymentId: payments[0].id, requiresManualReview: true, refundStatus: 'MANUAL_REFUND_REQUIRED',
+      })]));
+    }
+    const foreignInbox = await request(app.getHttpServer()).get('/api/payments/vnpay/manual-review')
+      .auth(customerBToken, { type: 'bearer' }).expect(200);
+    expect(foreignInbox.body.items).not.toEqual(expect.arrayContaining([expect.objectContaining({ paymentId: payments[0].id })]));
+    const refund = jest.spyOn(app.get(VnPayService), 'refundTransaction');
+    await request(app.getHttpServer()).post('/api/payments/vnpay/refund')
+      .auth(customerAToken, { type: 'bearer' }).send({ paymentId: payments[0].id }).expect(409);
+    expect(refund).not.toHaveBeenCalled();
+  });
+
+  it('finds older payments by every supported filter beyond the newest 50 and preserves ownership', async () => {
+    const { order } = await createOrderFixture();
+    const { order: newerOrder } = await createOrderFixture();
+    const storedOrder = await prisma.order.findUniqueOrThrow({ where: { id: order.id } });
+    const records = Array.from({ length: 51 }, (_, index) => ({
+      id: randomUUID(), key: randomUUID(), paymentId: randomUUID(),
+      createdAt: new Date(Date.now() - (51 - index) * 1000),
+    }));
+    await prisma.idempotencyRecord.createMany({ data: records.map((record, index) => ({
+      id: record.id, userId: storedOrder.userId, scope: 'PAY_ORDER', key: record.key,
+      requestHash: 'a'.repeat(64), status: 'COMPLETED', httpStatus: 200,
+      response: { provider: 'VNPAY', transactionNo: `old-payment-${index}`, payDate: '20261028152500' },
+    })) });
+    await prisma.payment.createMany({ data: records.map((record, index) => ({
+      id: record.paymentId, orderId: index === 0 ? order.id : newerOrder.id,
+      idempotencyRecordId: record.id, idempotencyKey: record.key,
+      amount: order.total, method: 'CARD', status: 'FAILED', createdAt: record.createdAt,
+    })) });
+    const query = jest.spyOn(app.get(VnPayService), 'queryTransaction').mockResolvedValue({
+      vnp_ResponseCode: '00', vnp_TransactionType: '01', vnp_TransactionStatus: '00',
+    } as never);
+    const filters = [
+      { paymentId: records[0].paymentId }, { orderId: order.id },
+      { orderCode: ` ${order.code.toLowerCase()} ` }, { transactionNo: 'old-payment-0' },
+    ];
+    for (const filter of filters) {
+      for (const token of [customerAToken, staffToken]) {
+        const response = await request(app.getHttpServer())
+          .post('/api/payments/vnpay/querydr').auth(token, { type: 'bearer' }).send(filter).expect(200);
+        expect(response.body.transaction.paymentId).toBe(records[0].paymentId);
+      }
+      await request(app.getHttpServer()).post('/api/payments/vnpay/querydr')
+        .auth(customerBToken, { type: 'bearer' }).send(filter).expect(404);
+    }
+    expect(query).toHaveBeenCalledTimes(8);
+    for (const filter of [{ paymentId: 'invalid-id' }, { orderId: 'invalid-id' }]) {
+      await request(app.getHttpServer()).post('/api/payments/vnpay/querydr')
+        .auth(customerAToken, { type: 'bearer' }).send(filter).expect(404);
+    }
+  });
 
   it('[#4] chặn callback có chữ ký hợp lệ nhưng sai số tiền, sai vnp_TransactionStatus hoặc sai vnp_TxnRef', async () => {
     const { order } = await createOrderFixture();

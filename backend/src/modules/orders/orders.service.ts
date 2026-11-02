@@ -112,7 +112,7 @@ export class OrdersService implements OrdersPort {
           user: true,
           items: { include: { toppings: true } },
           payments: {
-            where: { status: { in: ['SUCCEEDED', 'REFUNDED'] } },
+            where: { status: { in: ['SUCCEEDED', 'REFUNDED'] }, isDuplicate: false },
             include: { idempotency: true },
             orderBy: { createdAt: 'desc' },
             take: 1,
@@ -138,64 +138,109 @@ export class OrdersService implements OrdersPort {
           throw new ApiError(409, 'ORDER_VERSION_CONFLICT', 'Đơn hàng đã thay đổi, vui lòng tải lại');
         }
 
-        // --- XỬ LÝ HOÀN TIỀN STRIPE (NẾU ĐƠN THANH TOÁN QUA STRIPE) ---
-        if (vnpayMeta.provider === 'STRIPE' && this.stripe) {
-          if (existingOrder.status === 'PAID') {
-            if (existingOrder.version !== expectedVersion) {
+        if (vnpayMeta.provider === 'STRIPE') {
+          if (!this.stripe) throw new ApiError(503, 'STRIPE_CONFIG_MISSING', 'Cổng Stripe chưa được cấu hình');
+          if (existingOrder.status !== 'PAID') {
+            throw new ApiError(409, 'INVALID_ORDER_TRANSITION', 'Chỉ có thể hủy đơn đã thanh toán trước khi pha chế');
+          }
+          if (existingOrder.version !== expectedVersion) {
+            throw new ApiError(409, 'ORDER_VERSION_CONFLICT', 'Đơn hàng đã thay đổi, vui lòng tải lại');
+          }
+          // A completed free checkout has no PaymentIntent and no money to refund.
+          if (existingOrder.total === 0 && vnpayPayment.amount === 0) {
+            return this.unitOfWork.run(async tx => {
+              await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${orderId}::uuid FOR UPDATE`;
+              const current = await this.transitions.loadOwned(tx, userId, orderId);
+              if (current.status === 'CANCELLED') {
+                if (current.version !== expectedVersion) throw new ApiError(409, 'ORDER_VERSION_CONFLICT', 'Đơn hàng đã thay đổi, vui lòng tải lại');
+                return toApiOrder(current);
+              }
+              const cancelled = await this.transitions.transition(tx, {
+                orderId, actorUserId: userId, expectedVersion, toStatus: 'CANCELLED',
+              });
+              await tx.payment.update({ where: { id: vnpayPayment.id }, data: { status: 'REFUNDED' } });
+              await this.loyalty.reverse(tx, current);
+              await tx.idempotencyRecord.update({ where: { id: vnpayPayment.idempotencyRecordId }, data: {
+                httpStatus: 200, response: { ...vnpayMeta, refundStatus: 'NOT_REQUIRED', requiresManualReview: false },
+              } });
+              return toApiOrder(cancelled);
+            });
+          }
+          if (vnpayMeta.refundStatus === 'PENDING_RECONCILIATION' && !vnpayMeta.refundId) {
+            throw new ApiError(409, 'REFUND_PENDING_RECONCILIATION', 'Yêu cầu hoàn tiền chưa rõ kết quả; cần nhân viên đối soát trước khi gửi lại.');
+          }
+          await this.unitOfWork.run(async tx => {
+            await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${orderId}::uuid FOR UPDATE`;
+            const current = await this.transitions.loadOwned(tx, userId, orderId);
+            const payment = await tx.payment.findUnique({ where: { id: vnpayPayment.id } });
+            if (payment?.status === 'REFUNDED') throw new ApiError(409, 'PAYMENT_ALREADY_REFUNDED', 'Giao dịch đã hoàn tiền');
+            const freshAttempt = await tx.idempotencyRecord.findUnique({ where: { id: vnpayPayment.idempotencyRecordId } });
+            const freshMeta = (freshAttempt?.response ?? {}) as Record<string, unknown>;
+            if (freshAttempt?.httpStatus === 201 &&
+                (!freshMeta.refundId || freshMeta.refundId !== vnpayMeta.refundId)) {
+              throw new ApiError(409, 'REFUND_PENDING_RECONCILIATION', 'Yêu cầu hoàn tiền đang xử lý; vui lòng tải lại trước khi kiểm tra tiếp.');
+            }
+            if (current.version !== expectedVersion || current.status !== 'PAID') {
               throw new ApiError(409, 'ORDER_VERSION_CONFLICT', 'Đơn hàng đã thay đổi, vui lòng tải lại');
             }
-            if (vnpayPayment.status === 'REFUNDED') {
-              throw new ApiError(409, 'PAYMENT_ALREADY_REFUNDED', 'Giao dịch này đã được hoàn tiền trước đó');
-            }
-
-            const refundResult = await this.stripe.refundPayment({
-              paymentIntentId: typeof vnpayMeta.paymentIntentId === 'string' ? vnpayMeta.paymentIntentId : undefined,
-              amount: vnpayPayment.amount,
-              reason: `Khach hang huy don ${existingOrder.code}`,
+            await tx.idempotencyRecord.update({
+              where: { id: vnpayPayment.idempotencyRecordId },
+              data: { httpStatus: 201, response: { ...vnpayMeta, refundStatus: 'PENDING_RECONCILIATION' } },
             });
-
-            if (refundResult.outcome === 'SUCCESS') {
-              return this.unitOfWork.run(async (tx) => {
-                const order = await this.transitions.loadOwned(tx, userId, orderId);
-                if (order.status === 'CANCELLED' && order.version === expectedVersion) {
-                  return toApiOrder(order);
-                }
-                const cancelled = await this.transitions.transition(tx, {
-                  orderId,
-                  actorUserId: userId,
-                  expectedVersion,
-                  toStatus: 'CANCELLED',
-                });
-
-                await tx.payment.update({
-                  where: { id: vnpayPayment.id },
-                  data: { status: 'REFUNDED' },
-                });
-
-                await this.loyalty.reverse(tx, order);
-
-                await tx.idempotencyRecord.update({
-                  where: { id: vnpayPayment.idempotencyRecordId },
-                  data: {
-                    status: 'COMPLETED',
-                    httpStatus: 200,
-                    response: {
-                      ...vnpayMeta,
-                      refundStatus: 'REFUNDED',
-                      refundId: refundResult.refundId,
-                    },
-                  },
-                });
-
-                return toApiOrder(cancelled);
+          });
+          // Persist a pending marker before the external call. Repeated POSTs share the same Stripe key;
+          // once a refund ID is known, retries only retrieve its current status.
+          const refundResult = await this.stripe.refundPayment({
+            paymentIntentId: typeof vnpayMeta.paymentIntentId === 'string' ? vnpayMeta.paymentIntentId : undefined,
+            amount: vnpayPayment.amount, idempotencyKey: `stripe-refund-${vnpayPayment.id}`,
+            refundId: typeof vnpayMeta.refundId === 'string' ? vnpayMeta.refundId : undefined,
+          });
+          const refundMeta = {
+            ...vnpayMeta,
+            ...(refundResult.refundId ? { refundId: refundResult.refundId } : {}),
+          };
+          if (refundResult.outcome !== 'SUCCESS') {
+            const uncertain = refundResult.outcome === 'UNCERTAIN';
+            await this.prisma.idempotencyRecord.updateMany({
+              where: { id: vnpayPayment.idempotencyRecordId, httpStatus: 201 },
+              data: { httpStatus: uncertain ? 201 : 200, response: {
+                ...refundMeta, refundStatus: uncertain ? 'PENDING_RECONCILIATION' : 'FAILED',
+                requiresManualReview: uncertain && !refundResult.refundId,
+              } },
+            });
+            throw new ApiError(uncertain ? 409 : 502,
+              uncertain ? 'REFUND_PENDING_RECONCILIATION' : 'STRIPE_REFUND_FAILED',
+              uncertain ? 'Stripe chưa xác nhận hoàn tiền xong. Đơn và kho được giữ nguyên; vui lòng kiểm tra lại sau.'
+                : refundResult.message || 'Stripe từ chối hoàn tiền');
+          }
+          try {
+            return await this.unitOfWork.run(async tx => {
+              await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${orderId}::uuid FOR UPDATE`;
+              const current = await this.transitions.loadOwned(tx, userId, orderId);
+              const cancelled = current.status === 'PAID'
+                ? await this.transitions.transition(tx, {
+                    orderId, actorUserId: userId, expectedVersion: current.version, toStatus: 'CANCELLED',
+                  }) : current;
+              await tx.payment.update({ where: { id: vnpayPayment.id }, data: { status: 'REFUNDED' } });
+              await this.loyalty.reverse(tx, current);
+              const late = cancelled.status !== 'CANCELLED';
+              await tx.idempotencyRecord.update({
+                where: { id: vnpayPayment.idempotencyRecordId },
+                data: { httpStatus: 200, response: {
+                  ...refundMeta, refundStatus: late ? 'REFUNDED_LATE_MANUAL_REVIEW' : 'REFUNDED',
+                  requiresManualReview: late,
+                } },
               });
-            }
-
-            throw new ApiError(502, 'STRIPE_REFUND_FAILED', refundResult.message || 'Lỗi hoàn tiền qua Stripe');
+              return toApiOrder(cancelled);
+            });
+          } catch (error) {
+            await this.prisma.idempotencyRecord.updateMany({
+              where: { id: vnpayPayment.idempotencyRecordId, httpStatus: 201 },
+              data: { httpStatus: 201, response: { ...refundMeta, refundStatus: 'PENDING_RECONCILIATION' } },
+            });
+            throw error;
           }
         }
-        // --- KẾT THÚC XỬ LÝ STRIPE ---
-
         if (
           vnpayMeta.refundStatus === 'PENDING_RECONCILIATION' ||
           vnpayPayment.idempotency?.httpStatus === 201
@@ -445,7 +490,6 @@ export class OrdersService implements OrdersPort {
     if (!STAFF_STATUSES.includes(input.status)) {
       throw new ApiError(409, 'INVALID_ORDER_TRANSITION', `Không thể chuyển sang ${input.status} bằng endpoint này`);
     }
-    let hasRefundedPayment = false;
     if (this.prisma) {
       const existingOrder = await this.prisma.order.findUnique({
         where: { id: orderId },
@@ -462,9 +506,6 @@ export class OrdersService implements OrdersPort {
           'Đơn hàng đang có yêu cầu hoàn tiền VNPay chờ đối soát, không thể chuyển trạng thái pha chế trước khi đối soát xong',
         );
       }
-      hasRefundedPayment = Boolean(
-        existingOrder?.payments.some((p) => p.status === 'REFUNDED'),
-      );
     }
     return this.unitOfWork.run(async tx => {
       const updated = await this.transitions.transition(tx, {
@@ -473,8 +514,9 @@ export class OrdersService implements OrdersPort {
         expectedVersion: input.expectedVersion,
         toStatus: input.status,
       });
-      if (input.status === 'COMPLETED' && !hasRefundedPayment) {
-        await this.loyalty.earn(tx, updated);
+      if (input.status === 'COMPLETED') {
+        const refunded = await tx.payment.findFirst({ where: { orderId, status: 'REFUNDED', isDuplicate: false } });
+        if (!refunded) await this.loyalty.earn(tx, updated);
       }
       return toApiOrder(updated);
     });

@@ -13,6 +13,7 @@ import {
   ValidationPipe,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
+import type { RawBodyRequest } from '@nestjs/common';
 import {
   LoyaltyTransactionsPort,
   OrderTransactionsPort,
@@ -23,6 +24,7 @@ import { ApiError } from '../../common/errors/api-error';
 import { CurrentUser, IdempotencyKey, JwtAuthGuard } from '../../common/security/security';
 import type { CurrentUserData } from '../../common/security/security';
 import { PrismaService } from '../../prisma/prisma.service';
+import type { Prisma } from '../../generated/prisma/client';
 import { isUniqueConstraintError } from '../idempotency/idempotency.service';
 import {
   CreatePaymentDto,
@@ -84,52 +86,31 @@ export class PaymentsController {
     if (order.status !== 'PENDING' && order.status !== 'PAYMENT_FAILED') {
       throw new ApiError(409, 'ORDER_NOT_PAYABLE', 'Đơn hàng không ở trạng thái có thể thanh toán');
     }
+    if (order.total === 0) {
+      throw new ApiError(422, 'PAYMENT_METHOD_UNSUPPORTED', 'VNPay không hỗ trợ đơn 0đ. Vui lòng chọn Stripe để xác nhận đơn miễn phí.');
+    }
 
     const ipAddr =
       (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
       req.socket.remoteAddress ||
       '127.0.0.1';
 
-    const session = this.vnpay.createPaymentSession({
-      orderId: order.id,
-      orderCode: order.code,
-      amount: order.total,
-      ipAddr,
-    });
-
-    const requestHash = this.computeAttemptHash({
-      orderId: order.id,
-      orderCode: order.code,
-      txnRef: session.txnRef,
-      tmnCode: session.tmnCode,
-      amount: order.total,
-    });
-
-    await this.prisma.$transaction(async (tx) => {
-      if (order.status === 'PAYMENT_FAILED') {
-        await this.orderTransactions.prepareRetry(tx, order);
-      }
-
-      // Tuân thủ ràng buộc CHECK IdempotencyRecord_completion trên PostgreSQL:
-      // status = 'PROCESSING' yêu cầu httpStatus IS NULL và response IS NULL
-      await tx.idempotencyRecord.create({
-        data: {
-          userId: order.userId,
-          scope: 'PAY_ORDER',
-          key: session.txnRef,
-          requestHash,
-          status: 'PROCESSING',
-        },
-      });
-    });
-
-    return {
-      paymentUrl: session.paymentUrl,
-      txnRef: session.txnRef,
-      orderCode: order.code,
-      orderId: order.id,
-      amount: order.total,
-    };
+    return this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${order.id}::uuid FOR UPDATE`;
+      const current = await tx.order.findUniqueOrThrow({ where: { id: order.id }, include: { items: { include: { toppings: true } } } });
+      if (!['PENDING', 'PAYMENT_FAILED'].includes(current.status)) throw new ApiError(409, 'ORDER_NOT_PAYABLE', 'Đơn hàng không còn có thể thanh toán');
+      const active = await this.activeCheckout(tx, current, 'VNPAY');
+      if (active) return { paymentUrl: String(active.url), txnRef: String(active.txnRef), orderCode: current.code, orderId: current.id, amount: current.total };
+      if (current.status === 'PAYMENT_FAILED') await this.orderTransactions.prepareRetry(tx, current);
+      const session = this.vnpay.createPaymentSession({ orderId: current.id, orderCode: current.code, amount: current.total, ipAddr });
+      const requestHash = this.computeAttemptHash({ orderId: current.id, orderCode: current.code, txnRef: session.txnRef, tmnCode: session.tmnCode, amount: current.total });
+      await tx.idempotencyRecord.create({ data: {
+        userId: current.userId, scope: 'PAY_ORDER', key: session.txnRef, requestHash, status: 'PROCESSING',
+        context: { provider: 'VNPAY', orderId: current.id, url: session.paymentUrl, txnRef: session.txnRef,
+          expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString() },
+      } });
+      return { paymentUrl: session.paymentUrl, txnRef: session.txnRef, orderCode: current.code, orderId: current.id, amount: current.total };
+    }, { timeout: 20000, maxWait: 15000 });
   }
 
   /**
@@ -186,10 +167,19 @@ export class PaymentsController {
     });
     const currentStatus = latestOrder?.status ?? order.status;
 
-    if (currentStatus === 'CANCELLED') {
+    const latestAttempt = await this.prisma.idempotencyRecord.findUnique({ where: { id: attemptRecord.id } });
+    const latestMeta = (latestAttempt?.response ?? {}) as Record<string, unknown>;
+    const duplicate = latestMeta.refundStatus === 'DUPLICATE_PAYMENT_MANUAL_REFUND_REQUIRED';
+    const manualRefundRequired = latestMeta.refundStatus === 'MANUAL_REFUND_REQUIRED' || duplicate;
+    if (currentStatus === 'CANCELLED' || manualRefundRequired) {
       return {
         success: false,
-        message: 'Đơn hàng này đã bị hủy hoặc đã hoàn tiền',
+        paymentReceived: manualRefundRequired,
+        requiresManualReview: manualRefundRequired,
+        refundStatus: latestMeta.refundStatus,
+        message: duplicate ? 'Đã nhận thanh toán trùng. Khoản tiền bổ sung cần cửa hàng hoàn thủ công; đơn hàng giữ nguyên trạng thái.' : manualRefundRequired
+          ? 'VNPay đã xác nhận nhận tiền sau khi đơn bị hủy. Đơn vẫn đã hủy; vui lòng liên hệ cửa hàng để được hoàn tiền thủ công.'
+          : 'Đơn hàng này đã bị hủy hoặc đã hoàn tiền',
         orderCode: order.code,
         orderId: order.id,
         orderStatus: currentStatus,
@@ -257,8 +247,7 @@ export class PaymentsController {
     }
 
     if (
-      attemptRecord.status === 'COMPLETED' ||
-      (order.status !== 'PENDING' && order.status !== 'PAYMENT_FAILED')
+      (order.status !== 'PENDING' && order.status !== 'PAYMENT_FAILED' && !result.isSuccess)
     ) {
       return { RspCode: '02', Message: 'Order already confirmed' };
     }
@@ -315,57 +304,59 @@ export class PaymentsController {
       throw new ApiError(500, 'GATEWAY_ERROR', 'Cổng thanh toán Stripe chưa được cấu hình');
     }
 
-    const suffix = `${Date.now().toString().slice(-6)}${randomUUID().replace(/-/g, '').slice(0, 4)}`;
-    const stripeRef = `${order.code}_ST_${suffix}`;
+    return this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${order.id}::uuid FOR UPDATE`;
+      const current = await tx.order.findUniqueOrThrow({ where: { id: order.id }, include: { items: { include: { toppings: true } } } });
+      if (!['PENDING', 'PAYMENT_FAILED'].includes(current.status)) throw new ApiError(409, 'ORDER_NOT_PAYABLE', 'Đơn hàng không còn có thể thanh toán');
+      const active = await this.activeCheckout(tx, current, 'STRIPE');
+      if (active) return { checkoutUrl: String(active.url), sessionId: String(active.sessionId), stripeRef: String(active.stripeRef), orderCode: current.code, orderId: current.id, amount: current.total };
+      if (current.status === 'PAYMENT_FAILED') await this.orderTransactions.prepareRetry(tx, current);
+      const stripeRef = `${current.code}_ST_${randomUUID().replace(/-/g, '').slice(0, 8)}`;
+      const session = await this.stripe!.createCheckoutSession({ orderId: current.id, orderCode: current.code, stripeRef, amount: current.total });
+      const requestHash = createHash('sha256').update(JSON.stringify({ provider: 'STRIPE', stripeRef, sessionId: session.sessionId, orderId: current.id, amount: current.total })).digest('hex');
+      await tx.idempotencyRecord.create({ data: {
+        userId: current.userId, scope: 'PAY_ORDER', key: stripeRef, requestHash, status: 'PROCESSING',
+        context: { provider: 'STRIPE', orderId: current.id, url: session.url, sessionId: session.sessionId, stripeRef,
+          expiresAt: session.expiresAt ?? new Date(Date.now() + 31 * 60 * 1000).toISOString() },
+      } });
+      return { checkoutUrl: session.url, sessionId: session.sessionId, stripeRef, orderCode: current.code, orderId: current.id, amount: current.total };
+    }, { timeout: 20000, maxWait: 15000 });
+  }
 
-    const session = await this.stripe.createCheckoutSession({
-      orderId: order.id,
-      orderCode: order.code,
-      stripeRef,
-      amount: order.total,
-    });
-
-    const requestHash = createHash('sha256')
-      .update(
-        JSON.stringify({
-          provider: 'STRIPE',
-          stripeRef,
-          sessionId: session.sessionId,
-          orderId: order.id,
-          amount: order.total,
-        }),
-      )
-      .digest('hex');
-
-    await this.prisma.$transaction(async (tx) => {
-      if (order.status === 'PAYMENT_FAILED') {
-        await this.orderTransactions.prepareRetry(tx, order);
-      }
-
-      await tx.idempotencyRecord.create({
-        data: {
-          userId: order.userId,
-          scope: 'PAY_ORDER',
-          key: stripeRef,
-          requestHash,
-          status: 'PROCESSING',
-        },
-      });
-    });
-
-    return {
-      checkoutUrl: session.url,
-      sessionId: session.sessionId,
-      stripeRef,
-      orderCode: order.code,
-      orderId: order.id,
-      amount: order.total,
-    };
+  private async activeCheckout(tx: Prisma.TransactionClient, order: { id: string; code: string; userId: string }, provider: 'STRIPE' | 'VNPAY') {
+    const attempt = await tx.idempotencyRecord.findFirst({ where: {
+      userId: order.userId, scope: 'PAY_ORDER', status: 'PROCESSING', OR: [
+        { context: { path: ['orderId'], equals: order.id } }, { key: { startsWith: `${order.code}_` } },
+      ],
+    }, orderBy: { createdAt: 'desc' } });
+    if (!attempt) return null;
+    const context = (attempt.context ?? {}) as Prisma.JsonObject;
+    const legacyStripe = attempt.key.includes('_ST_');
+    const expiresAt = typeof context.expiresAt === 'string' ? Date.parse(context.expiresAt)
+      : attempt.createdAt.getTime() + (legacyStripe ? 24 * 60 + 5 : 15) * 60 * 1000;
+    if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) return null;
+    if (context.provider !== provider || typeof context.url !== 'string') {
+      throw new ApiError(409, 'PAYMENT_SESSION_IN_PROGRESS', 'Đơn đã có phiên thanh toán đang mở. Vui lòng hoàn tất phiên đó hoặc hủy đơn trước khi tạo đơn mới.');
+    }
+    return context;
   }
 
   /**
    * Xác thực kết quả Stripe khi khách hàng được chuyển hướng về trang web
    */
+  @Post('stripe/webhook')
+  @HttpCode(200)
+  async handleStripeWebhook(@Req() request: RawBodyRequest<Request>) {
+    if (!this.stripe) throw new ApiError(503, 'STRIPE_CONFIG_MISSING', 'Stripe chưa được cấu hình');
+    const signature = request.headers['stripe-signature'];
+    const event = this.stripe.verifyWebhook(request.rawBody, typeof signature === 'string' ? signature : undefined);
+    if (event.sessionId) {
+      const result = await this.verifyStripeSession(event.sessionId);
+      if (!result.orderId) throw new ApiError(409, 'STRIPE_WEBHOOK_NOT_SETTLED', 'Chưa thể đối chiếu phiên Stripe; cần gửi lại webhook');
+    }
+    return { received: true };
+  }
+
   @Get('stripe/verify')
   async verifyStripeSession(@Query('session_id') sessionId: string) {
     if (!sessionId) {
@@ -401,87 +392,76 @@ export class PaymentsController {
       };
     }
 
-    let attempt = verify.stripeRef
+    const attempt = verify.stripeRef
       ? await this.prisma.idempotencyRecord.findFirst({
-          where: { key: verify.stripeRef, scope: 'PAY_ORDER' },
+          where: { key: verify.stripeRef, userId: order.userId, scope: 'PAY_ORDER' },
         })
       : null;
-
-    if (!attempt) {
-      attempt = await this.prisma.idempotencyRecord.findFirst({
-        where: {
-          userId: order.userId,
-          scope: 'PAY_ORDER',
-          status: 'PROCESSING',
-        },
-        orderBy: { createdAt: 'desc' },
-      });
+    const expectedHash = createHash('sha256').update(JSON.stringify({
+      provider: 'STRIPE', stripeRef: verify.stripeRef, sessionId, orderId: order.id, amount: order.total,
+    })).digest('hex');
+    if (!attempt || attempt.requestHash !== expectedHash || verify.amount !== order.total) {
+      return { success: false, message: 'Phiên thanh toán hoặc số tiền Stripe không khớp với đơn hàng' };
     }
-
-    if (attempt && attempt.status === 'PROCESSING') {
-      const paymentKey = verify.stripeRef || attempt.key;
-      await this.prisma.$transaction(async (tx) => {
-        let current = await tx.order.findUnique({
-          where: { id: order.id },
-          include: { items: { include: { toppings: true } } },
-        });
-        if (!current) return;
-
-        await tx.idempotencyRecord.update({
-          where: { id: attempt.id },
-          data: {
-            status: 'COMPLETED',
-            httpStatus: 200,
-            response: {
-              provider: 'STRIPE',
-              orderId: current.id,
-              orderCode: current.code,
-              expectedAmount: current.total,
-              success: verify.isPaid,
-              sessionId,
-              stripeRef: paymentKey,
-              paymentIntentId: verify.paymentIntentId ?? '',
-              refundStatus: 'NOT_REFUNDED',
-            },
-          },
-        });
-
-        if (verify.isPaid) {
-          if (current.status === 'PAYMENT_FAILED') {
-            current = await this.orderTransactions.prepareRetry(tx, current);
-          }
-          if (current.status === 'PENDING') {
-            await this.orderTransactions.transition(tx, {
-              orderId: current.id,
-              actorUserId: current.userId,
-              expectedVersion: current.version,
-              toStatus: 'PAID',
-            });
-            await tx.payment.create({
-              data: {
-                orderId: current.id,
-                idempotencyRecordId: attempt.id,
-                idempotencyKey: paymentKey,
-                amount: current.total,
-                method: 'CARD',
-                status: 'SUCCEEDED',
-              },
-            });
-            await this.loyaltyTransactions.earn(tx, current);
-          }
-        }
-      });
+    // An open/unpaid session must stay retryable; only a confirmed payment may complete the attempt.
+    if (!verify.isPaid) {
+      return { success: false, message: verify.message, orderId: order.id, orderCode: order.code, orderStatus: order.status };
     }
-
+    await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${order.id}::uuid FOR UPDATE`;
+      let current = await tx.order.findUnique({
+        where: { id: order.id }, include: { items: { include: { toppings: true } } },
+      });
+      if (!current) return;
+      const existingPayment = await tx.payment.findFirst({ where: { orderId: current.id, status: { in: ['SUCCEEDED', 'REFUNDED'] }, isDuplicate: false } });
+      const duplicate = Boolean(existingPayment && existingPayment.idempotencyRecordId !== attempt.id);
+      if (!duplicate && current.status === 'PAYMENT_FAILED') {
+        current = await this.orderTransactions.transition(tx, { orderId: current.id, actorUserId: current.userId,
+          expectedVersion: current.version, toStatus: 'CANCELLED' });
+      }
+      const manual = current.status === 'CANCELLED' || duplicate;
+      const requiresManualReview = manual && current.total > 0;
+      const claim = await tx.idempotencyRecord.updateMany({
+        where: { id: attempt.id, OR: [
+          { status: 'PROCESSING' },
+          // Recover legacy completed attempts that never produced a receipt.
+          { status: 'COMPLETED', payment: { is: null }, AND: [
+            { response: { path: ['provider'], equals: 'STRIPE' } },
+          ] },
+        ] },
+        data: { status: 'COMPLETED', httpStatus: 200, response: {
+          provider: 'STRIPE', orderId: current.id, orderCode: current.code, expectedAmount: current.total,
+          success: true, sessionId, stripeRef: attempt.key, paymentIntentId: verify.paymentIntentId ?? '',
+          transactionNo: verify.paymentIntentId ?? sessionId,
+          refundStatus: manual && current.total === 0 ? 'NOT_REQUIRED' : duplicate ? 'DUPLICATE_PAYMENT_MANUAL_REFUND_REQUIRED' : manual ? 'MANUAL_REFUND_REQUIRED' : 'NOT_REFUNDED', requiresManualReview,
+        } },
+      });
+      if (claim.count === 0) return;
+      if (!manual && current.status === 'PENDING') {
+        await this.orderTransactions.transition(tx, {
+          orderId: current.id, actorUserId: current.userId, expectedVersion: current.version, toStatus: 'PAID',
+        });
+      } else if (!manual) return;
+      await tx.payment.create({ data: {
+        orderId: current.id, idempotencyRecordId: attempt.id, idempotencyKey: attempt.key,
+        amount: current.total, method: 'CARD', status: manual && current.total === 0 ? 'REFUNDED' : 'SUCCEEDED', isDuplicate: duplicate,
+      } });
+    });
     const latest = await this.prisma.order.findUnique({ where: { id: order.id } });
+    const latestAttempt = await this.prisma.idempotencyRecord.findUnique({ where: { id: attempt.id } });
+    const meta = (latestAttempt?.response ?? {}) as Record<string, unknown>;
+    const duplicate = meta.refundStatus === 'DUPLICATE_PAYMENT_MANUAL_REFUND_REQUIRED';
+    const manual = meta.refundStatus === 'MANUAL_REFUND_REQUIRED' || duplicate;
+    const refunded = ['REFUNDED', 'REFUNDED_LATE_MANUAL_REVIEW'].includes(String(meta.refundStatus));
+    const paidStatus = ['PAID', 'PREPARING', 'READY', 'COMPLETED'].includes(latest?.status ?? '');
     return {
-      success: verify.isPaid,
-      message: verify.message,
-      orderCode: order.code,
-      orderId: order.id,
-      orderStatus: latest?.status ?? order.status,
-      amount: order.total,
-      paymentIntentId: verify.paymentIntentId,
+      success: paidStatus && meta.success === true && !manual && !refunded,
+      message: duplicate ? 'Đã nhận thanh toán trùng. Khoản tiền bổ sung cần cửa hàng hoàn thủ công; đơn hàng giữ nguyên trạng thái.' : manual
+        ? 'Stripe đã nhận tiền sau khi đơn bị hủy. Vui lòng liên hệ cửa hàng để hoàn tiền thủ công.'
+        : refunded ? 'Giao dịch này đã được hoàn tiền' : paidStatus ? verify.message : 'Đơn hàng đã bị hủy hoặc đã hoàn tiền',
+      paymentReceived: manual, requiresManualReview: manual, refundStatus: meta.refundStatus,
+      orderCode: order.code, orderId: order.id, orderStatus: latest?.status ?? order.status,
+      amount: order.total, paymentIntentId: verify.paymentIntentId,
     };
   }
 
@@ -492,17 +472,34 @@ export class PaymentsController {
   @Get('vnpay/transactions')
   @UseGuards(JwtAuthGuard)
   async listVnPayTransactions(@CurrentUser() user: CurrentUserData) {
+    return this.readVnPayTransactions(user);
+  }
+
+  @Get('vnpay/manual-review')
+  @UseGuards(JwtAuthGuard)
+  async listVnPayManualReview(@CurrentUser() user: CurrentUserData) {
+    return this.readVnPayTransactions(user, true);
+  }
+
+  @Get('manual-review')
+  @UseGuards(JwtAuthGuard)
+  async listManualReview(@CurrentUser() user: CurrentUserData) {
+    return this.readVnPayTransactions(user, true);
+  }
+
+  private async readVnPayTransactions(user: CurrentUserData, manualReviewOnly = false) {
     const payments = await this.prisma.payment.findMany({
-      where:
-        user.role === 'STAFF'
-          ? { method: 'CARD' }
-          : { method: 'CARD', order: { userId: user.id } },
+      where: {
+        method: 'CARD',
+        ...(user.role === 'STAFF' ? {} : { order: { userId: user.id } }),
+        ...(manualReviewOnly ? { idempotency: { response: { path: ['requiresManualReview'], equals: true } } } : {}),
+      },
       include: {
         order: true,
         idempotency: true,
       },
       orderBy: { createdAt: 'desc' },
-      take: 30,
+      ...(manualReviewOnly ? {} : { take: 30 }),
     });
 
     const items = payments.map((p) => {
@@ -536,11 +533,13 @@ export class PaymentsController {
 
       return {
         paymentId: p.id,
+        provider: typeof meta.provider === 'string' ? meta.provider : 'VNPAY',
         orderId: p.orderId,
         orderCode: p.order.code,
         orderStatus: p.order.status,
         reservationStatus: p.order.reservationStatus,
         paymentStatus: p.status,
+        isDuplicate: p.isDuplicate,
         refundStatus,
         requiresManualReview: Boolean(meta.requiresManualReview),
         amount: p.amount,
@@ -1211,6 +1210,8 @@ export class PaymentsController {
   ): Promise<{ alreadyConfirmed: boolean }> {
     try {
       return await this.prisma.$transaction(async (tx) => {
+        // Serialize against cancellation, then read the committed order status before settling.
+        await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${orderId}::uuid FOR UPDATE`;
         let current = await tx.order.findUnique({
           where: { id: orderId },
           include: { items: { include: { toppings: true } } },
@@ -1220,8 +1221,22 @@ export class PaymentsController {
           return { alreadyConfirmed: true };
         }
 
+        const existingPayment = result.isSuccess ? await tx.payment.findFirst({
+          where: { orderId: current.id, status: { in: ['SUCCEEDED', 'REFUNDED'] }, isDuplicate: false },
+        }) : null;
+        const duplicate = Boolean(existingPayment && existingPayment.idempotencyRecordId !== attemptRecordId);
+        if (result.isSuccess && !duplicate && current.status === 'PAYMENT_FAILED') {
+          current = await this.orderTransactions.transition(tx, { orderId: current.id, actorUserId: current.userId,
+            expectedVersion: current.version, toStatus: 'CANCELLED' });
+        }
         const claim = await tx.idempotencyRecord.updateMany({
-          where: { id: attemptRecordId, status: 'PROCESSING' },
+          where: { id: attemptRecordId, OR: [
+            { status: 'PROCESSING' },
+            ...(result.isSuccess ? [{ status: 'COMPLETED' as const, payment: { is: null }, AND: [
+              { response: { path: ['provider'], equals: 'VNPAY' } },
+              { response: { path: ['success'], equals: true } },
+            ] }] : []),
+          ] },
           data: {
             status: 'COMPLETED',
             httpStatus: 200,
@@ -1241,6 +1256,10 @@ export class PaymentsController {
               payDate: result.payDate ?? '',
               responseCode: result.responseCode,
               transactionStatus: result.transactionStatus,
+              ...(result.isSuccess && (current.status === 'CANCELLED' || duplicate) ? {
+                refundStatus: duplicate ? 'DUPLICATE_PAYMENT_MANUAL_REFUND_REQUIRED' : 'MANUAL_REFUND_REQUIRED',
+                requiresManualReview: true,
+              } : {}),
             },
           },
         });
@@ -1250,12 +1269,18 @@ export class PaymentsController {
         }
 
         if (result.isSuccess) {
+          if (current.status === 'CANCELLED' || duplicate) {
+            // Money was received after stock was released. Record it without reviving the order or touching stock.
+            await tx.payment.create({
+              data: {
+                orderId: current.id, idempotencyRecordId: attemptRecordId,
+                idempotencyKey: result.txnRef, amount: current.total, method: 'CARD', status: 'SUCCEEDED', isDuplicate: duplicate,
+              },
+            });
+            return { alreadyConfirmed: false };
+          }
           if (current.status !== 'PENDING' && current.status !== 'PAYMENT_FAILED') {
             return { alreadyConfirmed: true };
-          }
-
-          if (current.status === 'PAYMENT_FAILED') {
-            current = await this.orderTransactions.prepareRetry(tx, current);
           }
 
           await this.orderTransactions.transition(tx, {
@@ -1329,32 +1354,44 @@ export class PaymentsController {
       );
     }
 
-    const payments = await this.prisma.payment.findMany({
-      where:
-        user.role === 'STAFF'
-          ? { method: 'CARD' }
-          : { method: 'CARD', order: { userId: user.id } },
+    const filters: Prisma.PaymentWhereInput[] = [];
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const paymentId = body.paymentId?.trim();
+    const orderId = body.orderId?.trim();
+    const orderCode = body.orderCode?.trim();
+    const requestedTransactionNo = body.transactionNo?.trim();
+    if (paymentId && uuid.test(paymentId)) filters.push({ id: paymentId });
+    if (orderId && uuid.test(orderId)) filters.push({ orderId });
+    if (orderCode) filters.push({ order: { code: { equals: orderCode, mode: 'insensitive' } } });
+    if (requestedTransactionNo) {
+      filters.push({ idempotency: { response: { path: ['transactionNo'], equals: requestedTransactionNo } } });
+    }
+    if (filters.length === 0) return null;
+
+    // Apply selectors and ownership before limiting, so older transactions remain reachable.
+    const [match] = await this.prisma.payment.findMany({
+      where: {
+        method: 'CARD',
+        ...(user.role === 'STAFF' ? {} : { order: { userId: user.id } }),
+        OR: filters,
+      },
       include: {
         order: true,
         idempotency: true,
       },
       orderBy: { createdAt: 'desc' },
-      take: 50,
-    });
-
-    const match = payments.find((p) => {
-      const meta = (p.idempotency?.response ?? {}) as Record<string, unknown>;
-      const txNo = typeof meta.transactionNo === 'string' ? meta.transactionNo : '';
-      if (body.paymentId && p.id === body.paymentId.trim()) return true;
-      if (body.orderId && p.orderId === body.orderId.trim()) return true;
-      if (body.orderCode && p.order.code.toLowerCase() === body.orderCode.trim().toLowerCase()) return true;
-      if (body.transactionNo && txNo === body.transactionNo.trim()) return true;
-      return false;
+      take: 1,
     });
 
     if (!match) return null;
+    if (match.isDuplicate) {
+      throw new ApiError(409, 'MANUAL_REFUND_REQUIRED', 'Khoản thanh toán trùng cần hoàn thủ công; không hủy đơn hoặc hoàn kho của khoản thanh toán chính.');
+    }
 
     const meta = (match.idempotency?.response ?? {}) as Record<string, unknown>;
+    if (typeof meta.provider === 'string' && meta.provider !== 'VNPAY') {
+      throw new ApiError(404, 'PAYMENT_NOT_FOUND', 'Giao dịch này không thuộc cổng VNPay');
+    }
     const transactionNo =
       typeof meta.transactionNo === 'string' && meta.transactionNo.length > 0
         ? meta.transactionNo

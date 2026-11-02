@@ -57,5 +57,17 @@ services:
       start_period: 30s
       retries: 10
 
+  stripe-listener:
+    profiles: ["stripe-webhook"]
+    image: stripe/stripe-cli:v1.55.2
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - 'exec /bin/stripe listen --api-key "$$STRIPE_LISTENER_API_KEY" --events checkout.session.completed,checkout.session.async_payment_succeeded --forward-to http://backend:3001/api/payments/stripe/webhook'
+    environment:
+      STRIPE_LISTENER_API_KEY: ${STRIPE_LISTENER_API_KEY:-}
+    depends_on:
+      backend:
+        condition: service_healthy
+
 volumes:
   postgres_data:

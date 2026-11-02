@@ -291,15 +291,16 @@ describe('Loyalty module (Issue #15)', () => {
 
     it('auto-reconciles COMPLETED orders that are missing an EARN entry when fetching /api/loyalty/me', async () => {
       userB.loyaltyPoints = 0;
-      const unrewardedCompletedOrders = [
-        { id: 'order-studio-completed', userId: userB.id, total: 35000, status: 'COMPLETED' },
-      ];
+      const completedOrder = { id: 'order-studio-completed', userId: userB.id, total: 35000, status: 'COMPLETED' };
+      const unrewardedCompletedOrders = [completedOrder];
       (mockPrisma as Record<string, unknown>).order = {
+        findFirst: jest.fn().mockResolvedValue(completedOrder),
         findMany: jest.fn().mockImplementation(async ({ where }: { where: { userId: string } }) => {
           if (where.userId === userB.id) return unrewardedCompletedOrders.splice(0);
           return [];
         }),
       };
+      (mockPrisma as Record<string, unknown>).$transaction = async (work: (tx: unknown) => Promise<unknown>) => work(mockPrisma);
       mockPrisma.loyaltyEntry.findUnique.mockResolvedValueOnce(null);
       mockPrisma.loyaltyEntry.create.mockResolvedValueOnce({
         id: 'entry-studio-1',
@@ -331,6 +332,7 @@ describe('Loyalty module (Issue #15)', () => {
         },
       });
       delete (mockPrisma as Record<string, unknown>).order;
+      delete (mockPrisma as Record<string, unknown>).$transaction;
     });
 
     it('verifies frontend updateUserPoints synchronizes loyaltyPoints into shared auth store without infinite loops', () => {

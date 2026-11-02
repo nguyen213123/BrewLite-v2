@@ -6,6 +6,8 @@ import { useSearchParams } from 'next/navigation';
 import { apiGet } from '@/lib/api';
 import { getUser } from '@/lib/auth';
 import { useCartStore } from '@/lib/cart/cart-store';
+import { reconcileVnPayReturnOrder, type VnPayVerifyResponse } from '@/lib/checkout/vnpay-return';
+import type { Order } from '@/lib/contracts/api.generated';
 import { formatVnd } from '@/components/payments/payment-api';
 
 interface StripeVerifyResponse {
@@ -16,6 +18,9 @@ interface StripeVerifyResponse {
   orderStatus?: string;
   amount?: number;
   paymentIntentId?: string;
+  paymentReceived?: boolean;
+  requiresManualReview?: boolean;
+  refundStatus?: string;
 }
 
 function StripeReturnContent() {
@@ -42,35 +47,17 @@ function StripeReturnContent() {
         if (!active) return;
         setResult(res);
 
-        if (res.success) {
-          const user = getUser();
-          const storageKey = user?.id ? `brewlite-checkout:${user.id}` : null;
-          let settled = false;
-          if (storageKey && typeof window !== 'undefined') {
-            try {
-              const saved = JSON.parse(window.sessionStorage.getItem(storageKey) ?? 'null');
-              if (res.orderId && Array.isArray(saved?.purchased) && saved.purchased.length > 0) {
-                useCartStore.getState().settleOrder(res.orderId, saved.purchased);
-                settled = true;
-              }
-            } catch {
-              // ignore
-            }
-          }
-          if (!settled && typeof window !== 'undefined') {
-            try {
-              const rawLast = window.sessionStorage.getItem('brewlite-last-purchased');
-              const lastPurchased = rawLast ? JSON.parse(rawLast) : null;
-              if (res.orderId && Array.isArray(lastPurchased) && lastPurchased.length > 0) {
-                useCartStore.getState().settleOrder(res.orderId, lastPurchased);
-                settled = true;
-              }
-            } catch {
-              // ignore
-            }
-          }
-          if (!settled) {
-            useCartStore.getState().clear();
+        if (res.success && res.orderId && res.orderCode) {
+          const { currentOrder } = await reconcileVnPayReturnOrder(res as VnPayVerifyResponse, {
+            userId: getUser()?.id,
+            readSession: key => typeof window !== 'undefined' ? window.sessionStorage.getItem(key) : null,
+            writeSession: (key, value) => { if (typeof window !== 'undefined') window.sessionStorage.setItem(key, value); },
+            findOrder: orderId => apiGet<Order>(`/orders/${orderId}`),
+            settleOrder: (orderId, purchased) => useCartStore.getState().settleOrder(orderId, purchased),
+          });
+          if (!active) return;
+          if (currentOrder?.status === 'CANCELLED') {
+            setResult({ ...res, success: false, orderStatus: 'CANCELLED', message: 'Đơn hàng đã bị hủy; vui lòng kiểm tra lịch sử thanh toán.' });
           }
         }
       } catch (err: unknown) {
@@ -124,7 +111,7 @@ function StripeReturnContent() {
             isSuccess ? 'text-[#2d6a4f]' : 'text-[#9b2c2c]'
           }`}
         >
-          {isSuccess ? 'Thanh toán Stripe thành công!' : 'Thanh toán không thành công'}
+          {result?.refundStatus === 'DUPLICATE_PAYMENT_MANUAL_REFUND_REQUIRED' ? 'Đã nhận thanh toán trùng' : result?.paymentReceived ? 'Đã nhận tiền sau khi hủy đơn' : isSuccess ? 'Thanh toán Stripe thành công!' : 'Thanh toán không thành công'}
         </h1>
 
         <p className="mt-2 text-sm text-[#7a6254]">

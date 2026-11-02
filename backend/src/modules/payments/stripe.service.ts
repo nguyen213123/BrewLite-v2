@@ -1,9 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { createHmac, timingSafeEqual } from 'node:crypto';
+import { ApiError } from '../../common/errors/api-error';
 
 export interface StripeCheckoutResult {
   sessionId: string;
   url: string;
+  expiresAt?: string;
 }
 
 export interface StripeSessionVerifyResult {
@@ -29,6 +32,29 @@ export class StripeService {
   private readonly logger = new Logger(StripeService.name);
 
   constructor(private readonly config: ConfigService) {}
+
+  verifyWebhook(rawBody: Buffer | undefined, signature: string | undefined): { type: string; sessionId?: string } {
+    const secret = this.config.get<string>('STRIPE_WEBHOOK_SECRET') || process.env.STRIPE_WEBHOOK_SECRET;
+    if (!secret) throw new ApiError(503, 'STRIPE_WEBHOOK_CONFIG_MISSING', 'Chưa cấu hình khóa xác thực Stripe webhook');
+    if (!rawBody || !signature) throw new ApiError(400, 'STRIPE_WEBHOOK_INVALID_SIGNATURE', 'Thiếu chữ ký Stripe webhook');
+    const parts = signature.split(',').map(part => part.trim().split('='));
+    const timestamp = parts.find(([key]) => key === 't')?.[1] ?? '';
+    const expected = createHmac('sha256', secret).update(`${timestamp}.`).update(rawBody).digest();
+    const valid = /^\d+$/.test(timestamp) && Math.abs(Date.now() / 1000 - Number(timestamp)) <= 300 &&
+      parts.some(([key, value]) => key === 'v1' && /^[0-9a-f]{64}$/i.test(value ?? '') &&
+        timingSafeEqual(expected, Buffer.from(value, 'hex')));
+    if (!valid) throw new ApiError(400, 'STRIPE_WEBHOOK_INVALID_SIGNATURE', 'Chữ ký Stripe webhook không hợp lệ hoặc đã hết hạn');
+    let event: { type?: unknown; data?: { object?: { id?: unknown } } };
+    try { event = JSON.parse(rawBody.toString('utf8')) as typeof event; }
+    catch { throw new ApiError(400, 'STRIPE_WEBHOOK_INVALID_EVENT', 'Dữ liệu Stripe webhook không hợp lệ'); }
+    if (!event || typeof event.type !== 'string') throw new ApiError(400, 'STRIPE_WEBHOOK_INVALID_EVENT', 'Thiếu loại sự kiện Stripe');
+    if (!['checkout.session.completed', 'checkout.session.async_payment_succeeded'].includes(event.type)) return { type: event.type };
+    const id = event.data?.object?.id;
+    if (typeof id !== 'string' || !id.startsWith('cs_') || id.length > 255) {
+      throw new ApiError(400, 'STRIPE_WEBHOOK_INVALID_EVENT', 'Thiếu mã phiên thanh toán Stripe');
+    }
+    return { type: event.type, sessionId: id };
+  }
 
   private getSecretKey(): string {
     const key =
@@ -69,6 +95,7 @@ export class StripeService {
       'line_items[0][price_data][product_data][name]': `Đơn hàng ${params.orderCode}`,
       'line_items[0][price_data][unit_amount]': String(params.amount),
       'line_items[0][quantity]': '1',
+      expires_at: String(Math.floor(Date.now() / 1000) + 31 * 60),
     };
 
     const payload = new URLSearchParams(bodyObj).toString();
@@ -78,8 +105,10 @@ export class StripeService {
       headers: {
         Authorization: `Bearer ${secretKey}`,
         'Content-Type': 'application/x-www-form-urlencoded',
+        'Idempotency-Key': clientRef,
       },
       body: payload,
+      signal: AbortSignal.timeout(10000),
     });
 
     if (!response.ok) {
@@ -88,10 +117,11 @@ export class StripeService {
       throw new Error(`Stripe error: ${response.statusText}`);
     }
 
-    const data = (await response.json()) as { id: string; url: string };
+    const data = (await response.json()) as { id: string; url: string; expires_at?: number };
     return {
       sessionId: data.id,
       url: data.url,
+      expiresAt: new Date((data.expires_at ?? Math.floor(Date.now() / 1000) + 31 * 60) * 1000).toISOString(),
     };
   }
 
@@ -109,6 +139,7 @@ export class StripeService {
           headers: {
             Authorization: `Bearer ${secretKey}`,
           },
+          signal: AbortSignal.timeout(10000),
         },
       );
 
@@ -132,14 +163,16 @@ export class StripeService {
         payment_intent?: string;
       };
 
-      const isPaid = data.payment_status === 'paid' && data.status === 'complete';
+      const amount = data.amount_total ?? -1;
+      const isValidAmount = Number.isSafeInteger(amount) && amount >= 0;
+      const isPaid = isValidAmount && data.status === 'complete' &&
+        (data.payment_status === 'paid' || (data.payment_status === 'no_payment_required' && amount === 0));
       const orderId = data.metadata?.orderId || data.client_reference_id || '';
       const orderCode = data.metadata?.orderCode || '';
       const stripeRef = data.metadata?.stripeRef || data.client_reference_id || '';
-      const amount = data.amount_total || 0;
 
       return {
-        isValid: true,
+        isValid: isValidAmount,
         isPaid,
         orderId,
         orderCode,
@@ -168,7 +201,12 @@ export class StripeService {
     chargeId?: string;
     amount?: number;
     reason?: string;
+    idempotencyKey?: string;
+    refundId?: string;
   }): Promise<StripeRefundResult> {
+    if (params.amount !== undefined && (!Number.isSafeInteger(params.amount) || params.amount <= 0)) {
+      return { outcome: 'FAILED', message: 'Số tiền hoàn phải là số nguyên dương; đơn miễn phí không gọi API hoàn tiền' };
+    }
     const secretKey = this.getSecretKey();
 
     const bodyObj: Record<string, string> = {};
@@ -176,7 +214,7 @@ export class StripeService {
       bodyObj.payment_intent = params.paymentIntentId;
     } else if (params.chargeId) {
       bodyObj.charge = params.chargeId;
-    } else {
+    } else if (!params.refundId) {
       return {
         outcome: 'FAILED',
         message: 'Thiếu payment_intent hoặc charge ID để hoàn tiền',
@@ -190,13 +228,17 @@ export class StripeService {
     const payload = new URLSearchParams(bodyObj).toString();
 
     try {
-      const response = await fetch('https://api.stripe.com/v1/refunds', {
-        method: 'POST',
+      const response = await fetch(params.refundId
+        ? `https://api.stripe.com/v1/refunds/${encodeURIComponent(params.refundId)}`
+        : 'https://api.stripe.com/v1/refunds', {
+        method: params.refundId ? 'GET' : 'POST',
         headers: {
           Authorization: `Bearer ${secretKey}`,
           'Content-Type': 'application/x-www-form-urlencoded',
+          ...(params.idempotencyKey ? { 'Idempotency-Key': params.idempotencyKey } : {}),
         },
-        body: payload,
+        body: params.refundId ? undefined : payload,
+        signal: AbortSignal.timeout(10000),
       });
 
       const data = (await response.json()) as {
@@ -207,12 +249,12 @@ export class StripeService {
 
       if (!response.ok) {
         return {
-          outcome: 'FAILED',
+          outcome: response.status >= 500 || response.status === 409 || params.refundId ? 'UNCERTAIN' : 'FAILED',
           message: data.error?.message || response.statusText,
         };
       }
 
-      if (data.status === 'succeeded' || data.status === 'pending') {
+      if (data.status === 'succeeded') {
         return {
           outcome: 'SUCCESS',
           refundId: data.id,
@@ -222,7 +264,7 @@ export class StripeService {
       }
 
       return {
-        outcome: 'UNCERTAIN',
+        outcome: data.status === 'failed' || data.status === 'canceled' ? 'FAILED' : 'UNCERTAIN',
         refundId: data.id,
         status: data.status,
         message: `Trạng thái hoàn tiền Stripe: ${data.status}`,

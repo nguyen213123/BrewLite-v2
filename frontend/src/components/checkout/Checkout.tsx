@@ -332,16 +332,6 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
   }, [session, lifecycle, initialOrderId, user.id]);
 
   useEffect(() => {
-    if (paid && order) {
-      if (state.purchased && state.purchased.length > 0) {
-        useCartStore.getState().settleOrder(order.id, state.purchased);
-      } else {
-        useCartStore.getState().clear();
-      }
-    }
-  }, [paid, order, state.purchased]);
-
-  useEffect(() => {
     let cancelled = false;
     if (typeof apiGet === 'function') {
       apiGet<DbPromotion[]>('/promotions')

@@ -17,10 +17,20 @@ export class LoyaltyService implements LoyaltyPort, LoyaltyTransactionsPort {
         userId,
         status: 'COMPLETED',
         loyaltyEntries: { none: { kind: 'EARN' } },
+        payments: { none: { status: 'REFUNDED', isDuplicate: false } },
       },
     });
     for (const order of unrewarded) {
-      await this.earn(this.prisma as unknown as Tx, order as unknown as StoredOrder);
+      // Serialize with refunds and staff transitions, then recheck eligibility inside the transaction.
+      await this.prisma.$transaction(async tx => {
+        await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${order.id}::uuid FOR UPDATE`;
+        const current = await tx.order.findFirst({ where: {
+          id: order.id, userId, status: 'COMPLETED',
+          loyaltyEntries: { none: { kind: 'EARN' } },
+          payments: { none: { status: 'REFUNDED', isDuplicate: false } },
+        } });
+        if (current) await this.earn(tx, current as StoredOrder);
+      });
     }
   }
 
