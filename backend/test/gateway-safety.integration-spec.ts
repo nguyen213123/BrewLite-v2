@@ -29,6 +29,8 @@ integration('Gateway safety: active sessions, duplicate receipts, webhook and lo
     db = await createTempDatabase(originalEnv.DATABASE_URL);
     Object.assign(process.env, {
       DATABASE_URL: db.url, STRIPE_WEBHOOK_SECRET: secret,
+      // Session verification uses mocked fetch, but still requires an explicit test API key.
+      STRIPE_SECRET_KEY: 'sk_test_gateway_integration_only',
       JWT_SECRET: 'gateway-integration-jwt-secret-with-32-characters',
       VNPAY_TMN_CODE: 'TESTTMN1', VNPAY_HASH_SECRET: vnSecret,
       VNPAY_URL: 'https://sandbox.vnpayment.vn/paymentv2/vpcpay.html',
