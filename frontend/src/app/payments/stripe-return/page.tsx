@@ -4,6 +4,8 @@ import { Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { apiGet } from '@/lib/api';
+import { getUser } from '@/lib/auth';
+import { useCartStore } from '@/lib/cart/cart-store';
 import { formatVnd } from '@/components/payments/payment-api';
 
 interface StripeVerifyResponse {
@@ -39,6 +41,38 @@ function StripeReturnContent() {
         );
         if (!active) return;
         setResult(res);
+
+        if (res.success) {
+          const user = getUser();
+          const storageKey = user?.id ? `brewlite-checkout:${user.id}` : null;
+          let settled = false;
+          if (storageKey && typeof window !== 'undefined') {
+            try {
+              const saved = JSON.parse(window.sessionStorage.getItem(storageKey) ?? 'null');
+              if (res.orderId && Array.isArray(saved?.purchased) && saved.purchased.length > 0) {
+                useCartStore.getState().settleOrder(res.orderId, saved.purchased);
+                settled = true;
+              }
+            } catch {
+              // ignore
+            }
+          }
+          if (!settled && typeof window !== 'undefined') {
+            try {
+              const rawLast = window.sessionStorage.getItem('brewlite-last-purchased');
+              const lastPurchased = rawLast ? JSON.parse(rawLast) : null;
+              if (res.orderId && Array.isArray(lastPurchased) && lastPurchased.length > 0) {
+                useCartStore.getState().settleOrder(res.orderId, lastPurchased);
+                settled = true;
+              }
+            } catch {
+              // ignore
+            }
+          }
+          if (!settled) {
+            useCartStore.getState().clear();
+          }
+        }
       } catch (err: unknown) {
         if (!active) return;
         setError(err instanceof Error ? err.message : 'Lỗi kết nối tới hệ thống máy chủ.');

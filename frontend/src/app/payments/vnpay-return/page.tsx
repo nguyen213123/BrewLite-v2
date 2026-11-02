@@ -35,7 +35,7 @@ function VnPayReturnContent() {
         if (!active) return;
 
         if (res.success && res.orderId) {
-          const { currentOrder } = await reconcileVnPayReturnOrder(res, {
+          const { currentOrder, settled } = await reconcileVnPayReturnOrder(res, {
             userId: getUser()?.id,
             readSession: (key) =>
               typeof window !== 'undefined' ? window.sessionStorage.getItem(key) : null,
@@ -47,6 +47,10 @@ function VnPayReturnContent() {
               useCartStore.getState().settleOrder(orderId, purchased),
           });
           if (!active) return;
+
+          if (!settled) {
+            useCartStore.getState().clear();
+          }
 
           if (currentOrder && currentOrder.status === 'CANCELLED') {
             setResult({
