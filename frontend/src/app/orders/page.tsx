@@ -6,6 +6,7 @@ import { apiGet, ApiRequestError } from '@/lib/api';
 import { subscribeAuth, getAuthSnapshot, getAuthServerSnapshot, updateUserPoints } from '@/lib/auth';
 import type { LoyaltyBalance, OrderPage, OrderSummary } from '@/lib/contracts/api.generated';
 import OrderStatusBadge from '@/components/OrderStatusBadge';
+import ManualPaymentReview from '@/components/payments/ManualPaymentReview';
 import { formatVnd } from '@/lib/format';
 
 export default function OrdersHistoryPage() {
@@ -120,6 +121,7 @@ export default function OrdersHistoryPage() {
       </section>
 
       <main className="mx-auto max-w-6xl px-6 py-10">
+        <ManualPaymentReview key={`${user.id}:${refreshToken}`} staff={user.role === 'STAFF'} />
         {error && (
           <div
             role="alert"

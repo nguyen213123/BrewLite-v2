@@ -32,11 +32,12 @@ function fakeDb(overrides: Partial<Row> = {}) {
     ...overrides,
   };
   const events: Array<{ orderId: string; actorUserId: string; fromStatus: string | null; toStatus: string; orderVersion: number }> = [];
-  const payments = [{ orderId: ORDER, status: 'SUCCEEDED' }];
+  const payments: Array<{ orderId: string; status: string; isDuplicate?: boolean }> = [{ orderId: ORDER, status: 'SUCCEEDED' }];
   const hooks = { beforeUpdate: (): void => undefined };
   const snapshot = () => ({ ...row, items: row.items.map(item => ({ ...item })) });
 
   const tx = {
+    $queryRaw: async () => [],
     order: {
       findUnique: async ({ where }: { where: { id: string } }) => (where.id === row.id ? snapshot() : null),
       findUniqueOrThrow: async ({ where }: { where: { id: string } }) => {
@@ -66,6 +67,9 @@ function fakeDb(overrides: Partial<Row> = {}) {
       },
     },
     payment: {
+      findFirst: async ({ where }: { where: { orderId: string; status: string; isDuplicate: boolean } }) =>
+        payments.find(payment => payment.orderId === where.orderId && payment.status === where.status &&
+          (payment.isDuplicate ?? false) === where.isDuplicate) ?? null,
       updateMany: async ({ where, data }: { where: { orderId: string; status: string }; data: { status: string } }) => {
         const hit = payments.filter(p => p.orderId === where.orderId && p.status === where.status);
         hit.forEach(p => { p.status = data.status; });
@@ -349,6 +353,12 @@ describe('OrdersService.cancel', () => {
 });
 
 describe('OrdersService.transition (STAFF)', () => {
+  it('does not earn when a primary payment has been refunded before completion', async () => {
+    const db = fakeDb({ status: 'READY', version: 3 });
+    db.payments[0].status = 'REFUNDED';
+    await db.orders.transition(STAFF, ORDER, { status: 'COMPLETED', expectedVersion: 3 });
+    expect(db.loyalty.earn).not.toHaveBeenCalled();
+  });
   it('walks PAID -> PREPARING -> READY -> COMPLETED, records each step, and earns loyalty points only on COMPLETED', async () => {
     const db = fakeDb({ status: 'PAID', version: 1 });
     await db.orders.transition(STAFF, ORDER, { status: 'PREPARING', expectedVersion: 1 });

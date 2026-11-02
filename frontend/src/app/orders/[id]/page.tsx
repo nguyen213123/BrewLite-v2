@@ -183,12 +183,9 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
           err.code === 'VNPAY_REFUND_UNCERTAIN' ||
           err.code === 'REFUND_PENDING_RECONCILIATION' ||
           err.code === 'REFUND_IN_PROGRESS' ||
-          err.code === 'REFUND_ALREADY_SUBMITTED' ||
-          err.message?.includes('chờ đối soát') ||
-          err.message?.includes('Chưa xác nhận') ||
-          err.message?.includes('hoàn tiền')
+          err.code === 'REFUND_ALREADY_SUBMITTED'
         ) {
-          setActionError('Đơn hàng đang được hoàn tiền, xin khách hàng vui lòng chờ kiểm tra.');
+          setActionError('Chưa xác nhận được kết quả hoàn tiền. Vui lòng liên hệ cửa hàng để kiểm tra.');
         } else {
           setActionError(err.message || 'Không thể hủy đơn hàng.');
         }
@@ -198,7 +195,7 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
           err.message.includes('Chưa xác nhận') ||
           err.message.includes('hoàn tiền'))
       ) {
-        setActionError('Đơn hàng đang được hoàn tiền, xin khách hàng vui lòng chờ kiểm tra.');
+        setActionError('Chưa xác nhận được kết quả hoàn tiền. Vui lòng liên hệ cửa hàng để kiểm tra.');
       } else {
         setActionError(err instanceof Error ? err.message : 'Không thể hủy đơn hàng.');
       }

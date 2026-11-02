@@ -86,7 +86,7 @@ integration('Shared schema/migration on PostgreSQL', () => {
       await tx.loyaltyEntry.create({ data });
     })).rejects.toMatchObject({ code: 'P2002' });
   });
-  it('enforces one successful/refunded payment per order even across keys', async () => {
+  it('enforces one primary successful/refunded payment per order even across keys', async () => {
     await expect(prisma.$transaction(async tx => {
       const user = await tx.user.create({ data: userData() });
       const order = await tx.order.create({ data: { code: code(), userId: user.id, subtotal: 0, total: 0, status: 'PAID', reservationStatus: 'CONSUMED' } });

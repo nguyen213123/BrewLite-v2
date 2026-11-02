@@ -199,13 +199,41 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
   const [method, setMethod] = useState<PaymentMethod>(state.attempt?.request.method ?? 'WALLET');
   const [outcome, setOutcome] = useState<'SUCCESS' | 'FAIL'>(state.attempt?.request.mockOutcome ?? 'SUCCESS');
   const [busy, setBusy] = useState(Boolean(state.orderId || initialOrderId));
+  const [selectedGateway, setSelectedGateway] = useState<'STRIPE' | 'VNPAY'>('STRIPE');
   const [vnpayLoading, setVnpayLoading] = useState(false);
+  const [stripeLoading, setStripeLoading] = useState(false);
+
+  const handleStripePayment = async () => {
+    if (!state.order) return;
+    setError('');
+    setStripeLoading(true);
+    try {
+      if (typeof window !== 'undefined' && state.purchased) {
+        window.sessionStorage.setItem('brewlite-last-purchased', JSON.stringify(state.purchased));
+      }
+      const data = await apiPost<{ checkoutUrl: string }>('/payments/stripe/create-session', {
+        orderId: state.order.id,
+      });
+      if (data?.checkoutUrl && typeof window !== 'undefined') {
+        window.location.href = data.checkoutUrl;
+      } else {
+        throw new Error('Không thể tạo liên kết thanh toán Stripe');
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Lỗi kết nối tới cổng thanh toán Stripe';
+      setError(msg);
+      setStripeLoading(false);
+    }
+  };
 
   const handleVnPayPayment = async () => {
     if (!state.order) return;
     setError('');
     setVnpayLoading(true);
     try {
+      if (typeof window !== 'undefined' && state.purchased) {
+        window.sessionStorage.setItem('brewlite-last-purchased', JSON.stringify(state.purchased));
+      }
       const data = await apiPost<{ paymentUrl: string }>('/payments/vnpay/create-url', {
         orderId: state.order.id,
       });
@@ -1264,41 +1292,126 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
 
           <div className="space-y-6">
             {order && !terminal && (
-              <section className="shop-panel m-0 border-2 border-[#005baa]/30 bg-gradient-to-br from-blue-50/40 to-white">
-                <div className="flex items-center justify-between border-b border-[#decbb4] pb-3">
+              <section className="rounded-2xl border-2 border-[#decbb4] bg-white p-6 shadow-sm">
+                <div className="flex items-center justify-between border-b border-[#decbb4]/60 pb-3.5">
                   <div className="flex items-center gap-2">
-                    <span className="flex size-7 items-center justify-center rounded-lg bg-[#005baa] text-white text-xs font-black">
-                      VNP
+                    <span className="flex size-7 items-center justify-center rounded-lg bg-[#4a2e20] text-white text-xs font-black">
+                      💳
                     </span>
-                    <h2 className="m-0 text-base font-extrabold text-[#005baa]">
-                      Cổng thanh toán VNPAY
+                    <h2 className="m-0 text-base font-extrabold text-[#4a2e20]">
+                      Phương thức thanh toán
                     </h2>
                   </div>
-                  <span className="rounded-full bg-blue-100 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-blue-800">
-                    Bên thứ 3 (Sandbox)
+                  <span className="rounded-full bg-[#f2e8dc] px-2.5 py-0.5 text-[10px] font-bold text-[#6d4c3d]">
+                    Chọn 1 cổng để thanh toán
                   </span>
                 </div>
 
-                <p className="mt-3 text-xs text-[#7a6254]">
-                  Thanh toán an toàn qua cổng <strong>VNPAY Sandbox</strong> hỗ trợ thẻ ATM nội địa (NCB...), Internet Banking và quét mã VNPAY-QR.
-                </p>
+                <div className="mt-4 space-y-3">
+                  {/* Stripe Option */}
+                  <div
+                    onClick={() => setSelectedGateway('STRIPE')}
+                    role="button"
+                    tabIndex={0}
+                    className={`flex items-start gap-3.5 rounded-xl border-2 p-4 text-left transition cursor-pointer ${
+                      selectedGateway === 'STRIPE'
+                        ? 'border-[#635bff] bg-indigo-50/40 shadow-xs'
+                        : 'border-[#decbb4]/60 bg-white hover:border-[#635bff]/40 hover:bg-[#faf9ff]'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="paymentGateway"
+                      checked={selectedGateway === 'STRIPE'}
+                      onChange={() => setSelectedGateway('STRIPE')}
+                      className="mt-1 size-4 accent-[#635bff]"
+                    />
+                    <div className="flex-1">
+                      <div className="flex flex-wrap items-center justify-between gap-1.5">
+                        <div className="flex items-center gap-2">
+                          <span className="flex size-6 items-center justify-center rounded-md bg-[#635bff] text-white text-[10px] font-black">
+                            STR
+                          </span>
+                          <span className="text-sm font-bold text-[#2b2b2b]">
+                            Thẻ Quốc tế (Stripe) - Visa / Mastercard
+                          </span>
+                        </div>
+                        <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-extrabold text-indigo-700">
+                          Hoàn tiền thật 100%
+                        </span>
+                      </div>
+                      <p className="mt-1.5 text-xs text-[#7a6254]">
+                        Cổng quốc tế Stripe Test Mode. Hỗ trợ đối soát và kiểm thử hoàn tiền (Refund) trực tiếp, cập nhật ngay trên Stripe Dashboard!
+                      </p>
+                    </div>
+                  </div>
 
-                <div className="mt-4">
+                  {/* VNPAY Option */}
+                  <div
+                    onClick={() => setSelectedGateway('VNPAY')}
+                    role="button"
+                    tabIndex={0}
+                    className={`flex items-start gap-3.5 rounded-xl border-2 p-4 text-left transition cursor-pointer ${
+                      selectedGateway === 'VNPAY'
+                        ? 'border-[#005baa] bg-blue-50/40 shadow-xs'
+                        : 'border-[#decbb4]/60 bg-white hover:border-[#005baa]/40 hover:bg-[#f8faff]'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="paymentGateway"
+                      checked={selectedGateway === 'VNPAY'}
+                      onChange={() => setSelectedGateway('VNPAY')}
+                      className="mt-1 size-4 accent-[#005baa]"
+                    />
+                    <div className="flex-1">
+                      <div className="flex flex-wrap items-center justify-between gap-1.5">
+                        <div className="flex items-center gap-2">
+                          <span className="flex size-6 items-center justify-center rounded-md bg-[#005baa] text-white text-[10px] font-black">
+                            VNP
+                          </span>
+                          <span className="text-sm font-bold text-[#2b2b2b]">
+                            Cổng thanh toán VNPAY (Sandbox)
+                          </span>
+                        </div>
+                        <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-extrabold text-blue-700">
+                          ATM / VNPAY-QR
+                        </span>
+                      </div>
+                      <p className="mt-1.5 text-xs text-[#7a6254]">
+                        Cổng nội địa VNPAY Sandbox hỗ trợ thẻ ATM các ngân hàng (NCB, Vietcombank...), Internet Banking và quét mã VNPAY-QR.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Single unified Action button */}
+                <div className="mt-5 border-t border-[#decbb4]/40 pt-4">
                   <button
                     type="button"
-                    disabled={busy || !state.verified || needsPriceConfirm || vnpayLoading}
-                    onClick={() => void handleVnPayPayment()}
+                    disabled={busy || !state.verified || needsPriceConfirm || vnpayLoading || stripeLoading}
+                    onClick={() => {
+                      if (selectedGateway === 'STRIPE') {
+                        void handleStripePayment();
+                      } else {
+                        void handleVnPayPayment();
+                      }
+                    }}
                     style={{
                       width: '100%',
                       margin: 0,
-                      backgroundColor: '#005baa',
+                      backgroundColor: selectedGateway === 'STRIPE' ? '#635bff' : '#005baa',
                       color: '#ffffff',
                       fontWeight: 'bold',
                       border: 'none',
                     }}
-                    className="flex items-center justify-center gap-2 rounded-xl py-3 text-sm shadow-sm transition hover:bg-[#004885] disabled:opacity-50"
+                    className="flex items-center justify-center gap-2 rounded-xl py-3.5 text-sm shadow-md transition hover:opacity-90 disabled:opacity-50"
                   >
-                    {vnpayLoading ? 'Đang mở cổng VNPAY…' : `Thanh toán ${formatVnd(order.total)} qua VNPAY →`}
+                    {stripeLoading
+                      ? 'Đang mở cổng Stripe…'
+                      : vnpayLoading
+                      ? 'Đang mở cổng VNPAY…'
+                      : `Thanh toán ${formatVnd(order.total)} qua ${selectedGateway === 'STRIPE' ? 'Stripe' : 'VNPAY'} →`}
                   </button>
                 </div>
               </section>

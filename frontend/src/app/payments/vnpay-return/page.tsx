@@ -152,10 +152,10 @@ function VnPayReturnContent() {
               isSuccess ? 'bg-[#cbe8d3] text-[#2d6a4f]' : 'bg-red-100 text-[#9b2c2c]'
             }`}
           >
-            {isSuccess ? 'Cổng thanh toán VNPay' : 'Thanh toán không thành công'}
+            {result.requiresManualReview ? 'Cần xử lý thủ công' : isSuccess ? 'Cổng thanh toán VNPay' : 'Thanh toán không thành công'}
           </span>
           <h1 className="mt-3 text-2xl font-extrabold text-[#4a2e20]">
-            {isSuccess ? 'Thanh toán VNPay thành công!' : 'Giao dịch chưa hoàn tất'}
+            {result.refundStatus === 'DUPLICATE_PAYMENT_MANUAL_REFUND_REQUIRED' ? 'Đã nhận thanh toán trùng' : result.paymentReceived ? 'Đã nhận tiền sau khi hủy đơn' : isSuccess ? 'Thanh toán VNPay thành công!' : 'Giao dịch chưa hoàn tất'}
           </h1>
           <p className="mt-1 text-sm text-[#7a6254]">
             {result.message}
@@ -200,7 +200,7 @@ function VnPayReturnContent() {
 
           {/* Nút điều hướng */}
           <div className="flex flex-wrap gap-3">
-            {isSuccess ? (
+            {isSuccess || result.requiresManualReview ? (
               <>
                 {result.orderId ? (
                   <Link

@@ -27,6 +27,19 @@ describe('reconcileVnPayReturnOrder — Quản lý giỏ hàng tại trang kết
     useCartStore.setState({ lines: [], settledOrders: [] });
   });
 
+  it('keeps cart and checkout session untouched for a late payment requiring manual refund', async () => {
+    const unexpected = () => { throw new Error('Manual refund must not settle the cart or update checkout'); };
+    const result = await reconcileVnPayReturnOrder({
+      success: false, orderId: 'cancelled-order', orderCode: 'BL-CANCELLED', orderStatus: 'CANCELLED',
+      message: 'Đã nhận tiền sau khi hủy đơn', paymentReceived: true,
+      requiresManualReview: true, refundStatus: 'MANUAL_REFUND_REQUIRED',
+    }, {
+      userId: 'user-1', readSession: unexpected, writeSession: unexpected,
+      findOrder: unexpected, settleOrder: unexpected,
+    });
+    assert.equal(result.settled, false);
+  });
+
   it('chỉ loại bỏ đúng các dòng đã chọn mua thuộc đơn PAID; giữ nguyên món không chọn mua và món thêm sau khi chuyển sang VNPay', async () => {
     // 1. Thêm 2 món vào giỏ ban đầu:
     // - Món 1 (Cappuccino, qty: 2, selected: true) -> khách chọn mua

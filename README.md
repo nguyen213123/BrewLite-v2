@@ -51,7 +51,41 @@ Toàn bộ các trang được thiết kế đồng bộ theo bảng màu **Brew
 | `/login`, `/register` | **Đăng nhập / Đăng ký** | Xác thực khách hàng & nhân viên bằng JWT Bearer token. |
 | `/payments` | **Chuyển hướng thanh toán** | Tự động chuyển hướng về `/checkout`; trang kết quả callback VNPay tại `/payments/vnpay-return`. |
 
+Nếu VNPay xác nhận thanh toán thành công sau khi đơn đã bị hủy, hệ thống vẫn ghi nhận giao dịch `SUCCEEDED`, đánh dấu `MANUAL_REFUND_REQUIRED` và `requiresManualReview`. Đơn giữ `CANCELLED`, kho đã hoàn không bị trừ lại, không cộng điểm và không gọi API hoàn tiền. Khách và nhân viên xem cảnh báo tại `/orders`; nhân viên đối soát và hoàn tiền thủ công bên ngoài hệ thống. API `GET /api/payments/vnpay/manual-review` trả các giao dịch cần kiểm tra (khách chỉ thấy giao dịch của mình, nhân viên thấy toàn bộ), không bị giới hạn bởi danh sách giao dịch gần nhất. Callback lặp lại không tạo giao dịch trùng.
+
+Stripe cũng ghi nhận thanh toán đến sau khi hủy theo quy tắc trên; danh sách cảnh báo chung dùng `GET /api/payments/manual-review`. Phiên Stripe chưa trả tiền giữ khả năng xác minh lại; hệ thống đối chiếu phiên và số tiền trước khi ghi nhận, chỉ cộng điểm khi đơn hoàn tất. Hoàn tiền `pending`/`requires_action` giữ nguyên đơn và kho, chặn chuyển sang pha chế. Khi có mã hoàn tiền, bấm hủy lại để kiểm tra trạng thái hiện tại, không tạo yêu cầu hoàn tiền mới; nếu mất kết nối và chưa có mã hoàn tiền thì cần nhân viên đối soát. Hai trang kết quả chỉ trừ đúng các dòng giỏ của đơn đã xác minh, không xóa toàn bộ giỏ khi lỗi mạng hoặc khi mở callback cũ.
+
 ### Quy tắc luồng đặt hàng & Thanh toán an toàn
+
+Phiên thanh toán đang mở được lưu trong `IdempotencyRecord.context` (phản hồi `response` vẫn `NULL` khi `PROCESSING`). Các lần bấm lặp dùng lại cùng URL; đổi cổng khi phiên cũ còn hiệu lực trả `PAYMENT_SESSION_IN_PROGRESS`. Hệ thống vẫn ghi nhận khoản tiền đến từ phiên cũ: khoản chính có `Payment.isDuplicate = false`, khoản bổ sung có `isDuplicate = true` và `DUPLICATE_PAYMENT_MANUAL_REFUND_REQUIRED`, không thay đổi đơn/kho. Chỉ khoản chính tham gia quy tắc một thanh toán chính thành công, hủy đơn và xét tích điểm.
+
+Nếu tiền đến sau khi đơn `PAYMENT_FAILED` đã trả kho, hệ thống hủy đơn và ghi nhận cần hoàn thủ công, không cố giữ lại nguyên liệu có thể đã bán cho đơn khác. Muốn thử thanh toán lại bình thường, tạo/mở phiên mới trước; bước tạo phiên sẽ kiểm tra và giữ lại kho trước khi chuyển tới cổng thanh toán.
+
+#### Nhận Stripe webhook khi khách không quay lại trang kết quả
+
+Endpoint: `POST /api/payments/stripe/webhook`, nhận `checkout.session.completed` và `checkout.session.async_payment_succeeded`. Backend kiểm tra chữ ký trên raw body và thời gian gửi, rồi đối chiếu lại phiên/số tiền với Stripe trước khi ghi nhận. Webhook lặp và trang return dùng chung cơ chế chống ghi trùng.
+
+Khi test local, dùng Stripe CLI đã đăng nhập tài khoản Test:
+
+Cách tự động bằng Docker, dùng đúng khóa Test của backend đang chạy:
+
+```sh
+npm run stripe:listen
+```
+
+Helper chỉ nhận khóa Test, khởi động service `stripe-listener` trong profile `stripe-webhook`, lưu signing secret vào `backend/.env` đã được gitignore, khởi động lại backend và gửi probe có chữ ký (không tạo giao dịch). Không in khóa ra terminal. Chạy lại lệnh sau khi khởi động lại Docker; giữ listener chạy trong lúc test. Có thể dừng bằng `docker compose --profile stripe-webhook stop stripe-listener`.
+
+Hoặc dùng Stripe CLI cài trên máy:
+
+```sh
+stripe listen --events checkout.session.completed,checkout.session.async_payment_succeeded --forward-to http://localhost:3001/api/payments/stripe/webhook
+```
+
+Lưu signing secret do listener cấp vào `STRIPE_WEBHOOK_SECRET` trong `backend/.env` (không commit khóa), rồi chạy `docker compose up -d --no-deps --force-recreate backend`. Giữ listener chạy khi test. Với môi trường public, cấu hình URL HTTPS tương ứng trong Stripe Dashboard và dùng secret của endpoint đó. Nếu chưa cấu hình secret, endpoint trả 503 và không chấp nhận dữ liệu chưa xác thực. Khóa Stripe API và signing secret là hai khóa khác nhau.
+
+Đơn có khoản thanh toán chính `REFUNDED` không được đồng bộ cộng điểm, kể cả nếu sau đó đạt `COMPLETED`. Hoàn lại một khoản trùng không làm mất quyền tích điểm của đơn được thanh toán hợp lệ.
+
+Đơn giảm giá 100% có tổng 0₫ được xác nhận khi Stripe trả `complete` + `no_payment_required` và `amount_total = 0`. Hủy đơn miễn phí vẫn trả kho/lượt khuyến mãi đúng một lần, không gọi API hoàn tiền khi không có PaymentIntent.
 
 1. **Hành trình chuẩn:** Mở `/` hoặc `/menu` → chọn sản phẩm/size/topping → `/cart` → `/checkout` → lịch sử đơn (`/orders`) và điểm thưởng (`/loyalty`).
 2. **Xử lý phía Server:** Backend dùng PostgreSQL thật để tính giá, giữ/trả kho và lượt khuyến mãi, lưu đơn/thanh toán và cộng/đảo điểm. Gateway Ví (`WALLET`) / Thẻ (`CARD`) là cổng mô phỏng theo phạm vi bài tập, không thu tiền thật.

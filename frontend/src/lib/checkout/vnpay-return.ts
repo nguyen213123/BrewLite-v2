@@ -14,6 +14,9 @@ export interface VnPayVerifyResponse {
   bankCode?: string;
   transactionNo?: string;
   responseCode?: string;
+  paymentReceived?: boolean;
+  requiresManualReview?: boolean;
+  refundStatus?: string;
 }
 
 export interface VnPayReturnReconcileDeps {
