@@ -126,6 +126,7 @@ export class OrdersService implements OrdersPort {
         Boolean(existingOrder && vnpayPayment) &&
         (vnpayMeta.provider === 'VNPAY' ||
           vnpayMeta.provider === 'STRIPE' ||
+          vnpayPayment!.idempotencyKey.includes('_ST_') ||
           vnpayPayment!.idempotencyKey.startsWith(`${existingOrder!.code}_`) ||
           vnpayPayment!.idempotencyKey.startsWith('cs_test_'));
 

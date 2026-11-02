@@ -11,6 +11,7 @@ export interface StripeSessionVerifyResult {
   isPaid: boolean;
   orderId: string;
   orderCode: string;
+  stripeRef?: string;
   amount: number;
   paymentIntentId?: string;
   message: string;
@@ -46,6 +47,7 @@ export class StripeService {
     orderId: string;
     orderCode: string;
     amount: number;
+    stripeRef?: string;
     items?: Array<{ name: string; quantity: number; price: number }>;
   }): Promise<StripeCheckoutResult> {
     const secretKey = this.getSecretKey();
@@ -54,35 +56,20 @@ export class StripeService {
       process.env.STRIPE_RETURN_URL ||
       'http://localhost:3000/payments/stripe-return';
 
-    const lineItems =
-      params.items && params.items.length > 0
-        ? params.items.map((it, idx) => ({
-            [`line_items[${idx}][price_data][currency]`]: 'vnd',
-            [`line_items[${idx}][price_data][product_data][name]`]: it.name,
-            [`line_items[${idx}][price_data][unit_amount]`]: String(it.price),
-            [`line_items[${idx}][quantity]`]: String(it.quantity),
-          }))
-        : [
-            {
-              'line_items[0][price_data][currency]': 'vnd',
-              'line_items[0][price_data][product_data][name]': `Đơn hàng ${params.orderCode}`,
-              'line_items[0][price_data][unit_amount]': String(params.amount),
-              'line_items[0][quantity]': '1',
-            },
-          ];
-
+    const clientRef = params.stripeRef || params.orderId;
     const bodyObj: Record<string, string> = {
       mode: 'payment',
       success_url: `${returnUrl}?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${this.config.get<string>('FRONTEND_URL') || 'http://localhost:3000'}/orders/${params.orderId}`,
-      client_reference_id: params.orderId,
+      client_reference_id: clientRef,
       'metadata[orderId]': params.orderId,
       'metadata[orderCode]': params.orderCode,
+      'metadata[stripeRef]': clientRef,
+      'line_items[0][price_data][currency]': 'vnd',
+      'line_items[0][price_data][product_data][name]': `Đơn hàng ${params.orderCode}`,
+      'line_items[0][price_data][unit_amount]': String(params.amount),
+      'line_items[0][quantity]': '1',
     };
-
-    for (const item of lineItems) {
-      Object.assign(bodyObj, item);
-    }
 
     const payload = new URLSearchParams(bodyObj).toString();
 
@@ -140,7 +127,7 @@ export class StripeService {
         payment_status: string;
         status: string;
         client_reference_id?: string;
-        metadata?: { orderId?: string; orderCode?: string };
+        metadata?: { orderId?: string; orderCode?: string; stripeRef?: string };
         amount_total?: number;
         payment_intent?: string;
       };
@@ -148,6 +135,7 @@ export class StripeService {
       const isPaid = data.payment_status === 'paid' && data.status === 'complete';
       const orderId = data.metadata?.orderId || data.client_reference_id || '';
       const orderCode = data.metadata?.orderCode || '';
+      const stripeRef = data.metadata?.stripeRef || data.client_reference_id || '';
       const amount = data.amount_total || 0;
 
       return {
@@ -155,6 +143,7 @@ export class StripeService {
         isPaid,
         orderId,
         orderCode,
+        stripeRef,
         amount,
         paymentIntentId: data.payment_intent,
         message: isPaid ? 'Thanh toán Stripe thành công' : 'Chưa hoàn tất thanh toán Stripe',

@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   Body,
   Controller,
@@ -315,23 +315,21 @@ export class PaymentsController {
       throw new ApiError(500, 'GATEWAY_ERROR', 'Cổng thanh toán Stripe chưa được cấu hình');
     }
 
-    const items = order.items.map((it) => ({
-      name: it.productName,
-      quantity: it.qty,
-      price: it.unitPrice,
-    }));
+    const suffix = `${Date.now().toString().slice(-6)}${randomUUID().replace(/-/g, '').slice(0, 4)}`;
+    const stripeRef = `${order.code}_ST_${suffix}`;
 
     const session = await this.stripe.createCheckoutSession({
       orderId: order.id,
       orderCode: order.code,
+      stripeRef,
       amount: order.total,
-      items,
     });
 
     const requestHash = createHash('sha256')
       .update(
         JSON.stringify({
           provider: 'STRIPE',
+          stripeRef,
           sessionId: session.sessionId,
           orderId: order.id,
           amount: order.total,
@@ -348,7 +346,7 @@ export class PaymentsController {
         data: {
           userId: order.userId,
           scope: 'PAY_ORDER',
-          key: session.sessionId,
+          key: stripeRef,
           requestHash,
           status: 'PROCESSING',
         },
@@ -358,6 +356,7 @@ export class PaymentsController {
     return {
       checkoutUrl: session.url,
       sessionId: session.sessionId,
+      stripeRef,
       orderCode: order.code,
       orderId: order.id,
       amount: order.total,
@@ -402,11 +401,25 @@ export class PaymentsController {
       };
     }
 
-    const attempt = await this.prisma.idempotencyRecord.findFirst({
-      where: { key: sessionId, scope: 'PAY_ORDER' },
-    });
+    let attempt = verify.stripeRef
+      ? await this.prisma.idempotencyRecord.findFirst({
+          where: { key: verify.stripeRef, scope: 'PAY_ORDER' },
+        })
+      : null;
+
+    if (!attempt) {
+      attempt = await this.prisma.idempotencyRecord.findFirst({
+        where: {
+          userId: order.userId,
+          scope: 'PAY_ORDER',
+          status: 'PROCESSING',
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+    }
 
     if (attempt && attempt.status === 'PROCESSING') {
+      const paymentKey = verify.stripeRef || attempt.key;
       await this.prisma.$transaction(async (tx) => {
         let current = await tx.order.findUnique({
           where: { id: order.id },
@@ -426,6 +439,7 @@ export class PaymentsController {
               expectedAmount: current.total,
               success: verify.isPaid,
               sessionId,
+              stripeRef: paymentKey,
               paymentIntentId: verify.paymentIntentId ?? '',
               refundStatus: 'NOT_REFUNDED',
             },
@@ -447,12 +461,13 @@ export class PaymentsController {
               data: {
                 orderId: current.id,
                 idempotencyRecordId: attempt.id,
-                idempotencyKey: sessionId,
+                idempotencyKey: paymentKey,
                 amount: current.total,
                 method: 'CARD',
                 status: 'SUCCEEDED',
               },
             });
+            await this.loyaltyTransactions.earn(tx, current);
           }
         }
       });
