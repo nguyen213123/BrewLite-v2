@@ -4,6 +4,7 @@ import {
   Controller,
   Get,
   HttpCode,
+  Optional,
   Post,
   Query,
   Req,
@@ -35,6 +36,7 @@ import {
   isVnPayRefundProcessingStatus,
   type VnPayVerifyResult,
 } from './vnpay.service';
+import { StripeService } from './stripe.service';
 
 @Controller('payments')
 export class PaymentsController {
@@ -44,6 +46,7 @@ export class PaymentsController {
     private readonly prisma: PrismaService,
     private readonly orderTransactions: OrderTransactionsPort,
     private readonly loyaltyTransactions: LoyaltyTransactionsPort,
+    @Optional() private readonly stripe?: StripeService,
   ) {}
 
   @Post()
@@ -272,6 +275,199 @@ export class PaymentsController {
     }
 
     return { RspCode: '00', Message: 'Confirm Success' };
+  }
+
+  /**
+   * Tạo Stripe Checkout Session để thanh toán thẻ quốc tế (Visa/Mastercard)
+   */
+  @Post('stripe/create-session')
+  @UseGuards(JwtAuthGuard)
+  async createStripeSession(
+    @CurrentUser() user: CurrentUserData,
+    @Body() body: { orderId: string },
+  ) {
+    if (!body?.orderId) {
+      throw new ApiError(400, 'INVALID_ORDER_ID', 'Mã đơn hàng không hợp lệ');
+    }
+
+    const order = await this.prisma.order.findUnique({
+      where: { id: body.orderId },
+      include: { items: { include: { toppings: true } } },
+    });
+
+    if (!order) {
+      throw new ApiError(404, 'ORDER_NOT_FOUND', 'Không tìm thấy đơn hàng');
+    }
+
+    if (user.role === 'CUSTOMER' && order.userId !== user.id) {
+      throw new ApiError(403, 'FORBIDDEN', 'Bạn không có quyền thanh toán đơn hàng này');
+    }
+
+    if (order.status !== 'PENDING' && order.status !== 'PAYMENT_FAILED') {
+      throw new ApiError(
+        400,
+        'ORDER_NOT_PAYABLE',
+        `Đơn hàng đang ở trạng thái ${order.status}, không thể thanh toán`,
+      );
+    }
+
+    if (!this.stripe) {
+      throw new ApiError(500, 'GATEWAY_ERROR', 'Cổng thanh toán Stripe chưa được cấu hình');
+    }
+
+    const items = order.items.map((it) => ({
+      name: it.productName,
+      quantity: it.qty,
+      price: it.unitPrice,
+    }));
+
+    const session = await this.stripe.createCheckoutSession({
+      orderId: order.id,
+      orderCode: order.code,
+      amount: order.total,
+      items,
+    });
+
+    const requestHash = createHash('sha256')
+      .update(
+        JSON.stringify({
+          provider: 'STRIPE',
+          sessionId: session.sessionId,
+          orderId: order.id,
+          amount: order.total,
+        }),
+      )
+      .digest('hex');
+
+    await this.prisma.$transaction(async (tx) => {
+      if (order.status === 'PAYMENT_FAILED') {
+        await this.orderTransactions.prepareRetry(tx, order);
+      }
+
+      await tx.idempotencyRecord.create({
+        data: {
+          userId: order.userId,
+          scope: 'PAY_ORDER',
+          key: session.sessionId,
+          requestHash,
+          status: 'PROCESSING',
+        },
+      });
+    });
+
+    return {
+      checkoutUrl: session.url,
+      sessionId: session.sessionId,
+      orderCode: order.code,
+      orderId: order.id,
+      amount: order.total,
+    };
+  }
+
+  /**
+   * Xác thực kết quả Stripe khi khách hàng được chuyển hướng về trang web
+   */
+  @Get('stripe/verify')
+  async verifyStripeSession(@Query('session_id') sessionId: string) {
+    if (!sessionId) {
+      return {
+        success: false,
+        message: 'Thiếu mã phiên session_id từ Stripe',
+      };
+    }
+
+    if (!this.stripe) {
+      return {
+        success: false,
+        message: 'Cổng thanh toán Stripe chưa được cấu hình',
+      };
+    }
+
+    const verify = await this.stripe.verifySession(sessionId);
+    if (!verify.isValid || !verify.orderId) {
+      return {
+        success: false,
+        message: verify.message,
+      };
+    }
+
+    const order = await this.prisma.order.findUnique({
+      where: { id: verify.orderId },
+    });
+
+    if (!order) {
+      return {
+        success: false,
+        message: 'Không tìm thấy đơn hàng tương ứng',
+      };
+    }
+
+    const attempt = await this.prisma.idempotencyRecord.findFirst({
+      where: { key: sessionId, scope: 'PAY_ORDER' },
+    });
+
+    if (attempt && attempt.status === 'PROCESSING') {
+      await this.prisma.$transaction(async (tx) => {
+        let current = await tx.order.findUnique({
+          where: { id: order.id },
+          include: { items: { include: { toppings: true } } },
+        });
+        if (!current) return;
+
+        await tx.idempotencyRecord.update({
+          where: { id: attempt.id },
+          data: {
+            status: 'COMPLETED',
+            httpStatus: 200,
+            response: {
+              provider: 'STRIPE',
+              orderId: current.id,
+              orderCode: current.code,
+              expectedAmount: current.total,
+              success: verify.isPaid,
+              sessionId,
+              paymentIntentId: verify.paymentIntentId ?? '',
+              refundStatus: 'NOT_REFUNDED',
+            },
+          },
+        });
+
+        if (verify.isPaid) {
+          if (current.status === 'PAYMENT_FAILED') {
+            current = await this.orderTransactions.prepareRetry(tx, current);
+          }
+          if (current.status === 'PENDING') {
+            await this.orderTransactions.transition(tx, {
+              orderId: current.id,
+              actorUserId: current.userId,
+              expectedVersion: current.version,
+              toStatus: 'PAID',
+            });
+            await tx.payment.create({
+              data: {
+                orderId: current.id,
+                idempotencyRecordId: attempt.id,
+                idempotencyKey: sessionId,
+                amount: current.total,
+                method: 'CARD',
+                status: 'SUCCEEDED',
+              },
+            });
+          }
+        }
+      });
+    }
+
+    const latest = await this.prisma.order.findUnique({ where: { id: order.id } });
+    return {
+      success: verify.isPaid,
+      message: verify.message,
+      orderCode: order.code,
+      orderId: order.id,
+      orderStatus: latest?.status ?? order.status,
+      amount: order.total,
+      paymentIntentId: verify.paymentIntentId,
+    };
   }
 
   /**

@@ -9,6 +9,7 @@ import { PaymentsController } from './payments.controller';
 import { PaymentsService } from './payments.service';
 import { PaymentsPort, MockPaymentGatewayPort } from '../../common/contracts/ports';
 import { MockPaymentGatewayService } from './mock-payment-gateway.service';
+import { StripeService } from './stripe.service';
 
 @Module({
   imports: [
@@ -25,7 +26,8 @@ import { MockPaymentGatewayService } from './mock-payment-gateway.service';
     { provide: PaymentsPort, useExisting: PaymentsService },
     MockPaymentGatewayService,
     { provide: MockPaymentGatewayPort, useExisting: MockPaymentGatewayService },
+    StripeService,
   ],
-  exports: [PaymentsPort, MockPaymentGatewayPort],
+  exports: [PaymentsPort, MockPaymentGatewayPort, StripeService],
 })
 export class PaymentsModule {}

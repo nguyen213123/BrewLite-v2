@@ -200,6 +200,27 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
   const [outcome, setOutcome] = useState<'SUCCESS' | 'FAIL'>(state.attempt?.request.mockOutcome ?? 'SUCCESS');
   const [busy, setBusy] = useState(Boolean(state.orderId || initialOrderId));
   const [vnpayLoading, setVnpayLoading] = useState(false);
+  const [stripeLoading, setStripeLoading] = useState(false);
+
+  const handleStripePayment = async () => {
+    if (!state.order) return;
+    setError('');
+    setStripeLoading(true);
+    try {
+      const data = await apiPost<{ checkoutUrl: string }>('/payments/stripe/create-session', {
+        orderId: state.order.id,
+      });
+      if (data?.checkoutUrl && typeof window !== 'undefined') {
+        window.location.href = data.checkoutUrl;
+      } else {
+        throw new Error('Không thể tạo liên kết thanh toán Stripe');
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Lỗi kết nối tới cổng thanh toán Stripe';
+      setError(msg);
+      setStripeLoading(false);
+    }
+  };
 
   const handleVnPayPayment = async () => {
     if (!state.order) return;
@@ -1286,7 +1307,7 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
                 <div className="mt-4">
                   <button
                     type="button"
-                    disabled={busy || !state.verified || needsPriceConfirm || vnpayLoading}
+                    disabled={busy || !state.verified || needsPriceConfirm || vnpayLoading || stripeLoading}
                     onClick={() => void handleVnPayPayment()}
                     style={{
                       width: '100%',
@@ -1299,6 +1320,47 @@ function UserCheckout({ user, initialOrderId }: { user: User; initialOrderId?: s
                     className="flex items-center justify-center gap-2 rounded-xl py-3 text-sm shadow-sm transition hover:bg-[#004885] disabled:opacity-50"
                   >
                     {vnpayLoading ? 'Đang mở cổng VNPAY…' : `Thanh toán ${formatVnd(order.total)} qua VNPAY →`}
+                  </button>
+                </div>
+              </section>
+            )}
+
+            {order && !terminal && (
+              <section className="rounded-2xl border-2 border-[#635bff]/40 bg-gradient-to-br from-indigo-50/50 to-white p-5 shadow-xs transition hover:border-[#635bff]">
+                <div className="flex items-center justify-between border-b border-[#635bff]/20 pb-3">
+                  <div className="flex items-center gap-2.5">
+                    <span className="flex size-7 items-center justify-center rounded-lg bg-[#635bff] text-white text-xs font-black">
+                      STR
+                    </span>
+                    <h2 className="m-0 text-base font-extrabold text-[#635bff]">
+                      Thẻ Quốc tế (Stripe)
+                    </h2>
+                  </div>
+                  <span className="rounded-full bg-indigo-100 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-indigo-800">
+                    Hỗ trợ Hoàn tiền thật 100%
+                  </span>
+                </div>
+
+                <p className="mt-3 text-xs text-[#7a6254]">
+                  Thanh toán qua cổng <strong>Stripe Test Mode</strong> hỗ trợ thẻ Visa, Mastercard quốc tế. Cho phép kiểm thử hoàn tiền (Refund) và hiển thị trực tiếp trên Stripe Dashboard!
+                </p>
+
+                <div className="mt-4">
+                  <button
+                    type="button"
+                    disabled={busy || !state.verified || needsPriceConfirm || vnpayLoading || stripeLoading}
+                    onClick={() => void handleStripePayment()}
+                    style={{
+                      width: '100%',
+                      margin: 0,
+                      backgroundColor: '#635bff',
+                      color: '#ffffff',
+                      fontWeight: 'bold',
+                      border: 'none',
+                    }}
+                    className="flex items-center justify-center gap-2 rounded-xl py-3 text-sm shadow-sm transition hover:bg-[#4f46e5] disabled:opacity-50"
+                  >
+                    {stripeLoading ? 'Đang mở cổng Stripe…' : `Thanh toán ${formatVnd(order.total)} qua Stripe (Visa/Mastercard) →`}
                   </button>
                 </div>
               </section>

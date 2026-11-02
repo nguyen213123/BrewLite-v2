@@ -18,6 +18,7 @@ import {
   formatVnPayDate,
   VnPayService,
 } from '../payments/vnpay.service';
+import { StripeService } from '../payments/stripe.service';
 import { buildQuote, generateOrderCode, normalizeCartItems } from './domain/order-pricing';
 import { toApiOrder } from './order.mapper';
 
@@ -35,6 +36,7 @@ export class OrdersService implements OrdersPort {
     private readonly inventory: InventoryPort,
     @Optional() private readonly prisma?: PrismaService,
     @Optional() private readonly vnpay?: VnPayService,
+    @Optional() private readonly stripe?: StripeService,
   ) {}
 
   // Preview only: no order, no stock hold and no promotion counter change (business-rules §2.7).
@@ -118,12 +120,14 @@ export class OrdersService implements OrdersPort {
         },
       });
 
-      const vnpayPayment = existingOrder?.payments[0];
+      const vnpayPayment = existingOrder?.payments?.[0];
       const vnpayMeta = (vnpayPayment?.idempotency?.response ?? {}) as Record<string, unknown>;
       const isVnPayOrder =
         Boolean(existingOrder && vnpayPayment) &&
         (vnpayMeta.provider === 'VNPAY' ||
-          vnpayPayment!.idempotencyKey.startsWith(`${existingOrder!.code}_`));
+          vnpayMeta.provider === 'STRIPE' ||
+          vnpayPayment!.idempotencyKey.startsWith(`${existingOrder!.code}_`) ||
+          vnpayPayment!.idempotencyKey.startsWith('cs_test_'));
 
       if (existingOrder && vnpayPayment && isVnPayOrder) {
         if (existingOrder.status === 'CANCELLED') {
@@ -132,6 +136,64 @@ export class OrdersService implements OrdersPort {
           }
           throw new ApiError(409, 'ORDER_VERSION_CONFLICT', 'Đơn hàng đã thay đổi, vui lòng tải lại');
         }
+
+        // --- XỬ LÝ HOÀN TIỀN STRIPE (NẾU ĐƠN THANH TOÁN QUA STRIPE) ---
+        if (vnpayMeta.provider === 'STRIPE' && this.stripe) {
+          if (existingOrder.status === 'PAID') {
+            if (existingOrder.version !== expectedVersion) {
+              throw new ApiError(409, 'ORDER_VERSION_CONFLICT', 'Đơn hàng đã thay đổi, vui lòng tải lại');
+            }
+            if (vnpayPayment.status === 'REFUNDED') {
+              throw new ApiError(409, 'PAYMENT_ALREADY_REFUNDED', 'Giao dịch này đã được hoàn tiền trước đó');
+            }
+
+            const refundResult = await this.stripe.refundPayment({
+              paymentIntentId: typeof vnpayMeta.paymentIntentId === 'string' ? vnpayMeta.paymentIntentId : undefined,
+              amount: vnpayPayment.amount,
+              reason: `Khach hang huy don ${existingOrder.code}`,
+            });
+
+            if (refundResult.outcome === 'SUCCESS') {
+              return this.unitOfWork.run(async (tx) => {
+                const order = await this.transitions.loadOwned(tx, userId, orderId);
+                if (order.status === 'CANCELLED' && order.version === expectedVersion) {
+                  return toApiOrder(order);
+                }
+                const cancelled = await this.transitions.transition(tx, {
+                  orderId,
+                  actorUserId: userId,
+                  expectedVersion,
+                  toStatus: 'CANCELLED',
+                });
+
+                await tx.payment.update({
+                  where: { id: vnpayPayment.id },
+                  data: { status: 'REFUNDED' },
+                });
+
+                await this.loyalty.reverse(tx, order);
+
+                await tx.idempotencyRecord.update({
+                  where: { id: vnpayPayment.idempotencyRecordId },
+                  data: {
+                    status: 'COMPLETED',
+                    httpStatus: 200,
+                    response: {
+                      ...vnpayMeta,
+                      refundStatus: 'REFUNDED',
+                      refundId: refundResult.refundId,
+                    },
+                  },
+                });
+
+                return toApiOrder(cancelled);
+              });
+            }
+
+            throw new ApiError(502, 'STRIPE_REFUND_FAILED', refundResult.message || 'Lỗi hoàn tiền qua Stripe');
+          }
+        }
+        // --- KẾT THÚC XỬ LÝ STRIPE ---
 
         if (
           vnpayMeta.refundStatus === 'PENDING_RECONCILIATION' ||

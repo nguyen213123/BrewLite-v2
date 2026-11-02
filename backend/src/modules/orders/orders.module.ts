@@ -6,6 +6,7 @@ import { InventoryModule } from '../inventory/inventory.module';
 import { LoyaltyModule } from '../loyalty/loyalty.module';
 import { IdempotencyModule } from '../idempotency/idempotency.module';
 import { VnPayService } from '../payments/vnpay.service';
+import { StripeService } from '../payments/stripe.service';
 import { OrdersController } from './orders.controller';
 import { OrdersService } from './orders.service';
 import { OrdersPort } from '../../common/contracts/ports';
@@ -25,7 +26,8 @@ import { OrderTransactionsPort } from '../../common/contracts/ports';
     OrderTransactionsService,
     { provide: OrderTransactionsPort, useExisting: OrderTransactionsService },
     VnPayService,
+    StripeService,
   ],
-  exports: [OrdersPort, OrderReadPort, OrderTransactionsPort, VnPayService],
+  exports: [OrdersPort, OrderReadPort, OrderTransactionsPort, VnPayService, StripeService],
 })
 export class OrdersModule {}
